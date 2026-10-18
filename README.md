@@ -10,7 +10,7 @@ engine sources, asset converters and research. The Android application,
 dual-display integration and NTSC-U conversion support are developed here.
 It is not an official Capcom release or a finished port.
 
-**Current version: 0.9 — world foundation / exploration preview.**
+**Current version: 0.22 — Kendo death/visibility corrections and zombie shove collisions.**
 Completable Leon A and Leon B campaigns are the intended goal; neither is
 implemented end to end yet. The presence of all room assets does not mean the
 full game is playable.
@@ -23,6 +23,16 @@ full game is playable.
   on the Thor's upper screen (1440×1080 with side bars). Models render at the
   viewport resolution. No replacement artwork is used.
 - Leon's movement, camera zones, collision, floor heights, stairs and slopes.
+- Original animated zombies and NPC models in the opening street, gun shop and
+  alley, driven by the shared native actor code.
+- Handgun/knife aiming and attacks, original firing/reload animation cadence,
+  ammunition use, zombie hit reactions and deaths, grabs, struggling free and
+  player damage. Death offers a restart or quit.
+- Original muzzle flash, smoke, shell casings and blood sprites. Original
+  handgun/knife, reload, empty-gun, zombie and player reaction samples.
+- The gun-shop welcome and window attack use the original scripts, Leon/NPC
+  animations, cinematic cameras, dialogue and room sounds. Control returns after
+  each scene; the front door follows the story state instead of bypassing it.
 - Door connections across the room catalog, with original door models and
   animation programs. **Pause → Door animations: On/Off** saves the preference;
   Off changes rooms instantly.
@@ -30,19 +40,23 @@ full game is playable.
   equipment, inspection and combination backed by shared native C rules.
 - Visible item pickups with **“Will you take the …?”** confirmation. Declining
   leaves the item; accepting adds it and removes its world model.
+- An animated condition trace with live HP and Fine/Caution/Danger status.
+  Zombie bites update it; a new session starts at Fine / 200 HP.
+- Exit / Quit game asks for confirmation before closing both app displays.
 - Controller focus after lower-screen touches, dual-display routing, screen
   swapping, and a single-display fallback.
 
 ## What is unfinished
 
-This remains an exploration preview. Android story/cutscene actors, enemies,
-combat, health/healing, item boxes, in-game saving, audio, movies, puzzles and
+This remains an exploration preview. Complete story/cutscene control, enemies
+outside the opening three rooms, complete combat, healing, item boxes, in-game saving,
+audio and speech outside the gun shop, music, movies, puzzles and
 complete progression are not connected. Scenario initialization, A/B-specific
 flags, cross-scenario choices, endings and results still need implementation
 and validation.
 
-Exploration currently uses converted door definitions even when a story event
-would replace them. This bypass must be removed when story integration works.
+Outside the gun shop, exploration still uses converted door definitions even
+when a story event would replace them. Those rooms need separate integration.
 Script smoke tests do not prove that story events or either campaign complete.
 Some upstream features, including most enemy types/bosses and scenario support,
 are themselves unfinished and require new engine work.
@@ -58,12 +72,16 @@ is the inherited **DS upstream roadmap**, not a list of working Android features
 | Left stick / D-pad | Move forward/back and turn |
 | Hold B while moving forward | Run |
 | A | Interact with a nearby door, item or scenery |
+| Hold R1 / right trigger + A | Aim and fire / stab (opening three rooms) |
+| A again with an empty handgun while aiming | Reload from carried ammunition |
+| Repeated A presses while grabbed | Struggle free |
 | Start / tap gameplay | Open the pause menu |
 | D-pad / stick, then A | Navigate and select a pause-menu entry |
 | B / Start in the pause menu | Resume |
 | Touch a lower-screen inventory slot | Pause and manage inventory |
 | A / X / Y in inventory | Equip / combine / inspect |
-| Start / lower-screen Exit | Return to gameplay |
+| Start / B in inventory | Return to gameplay |
+| Lower-screen Exit / Pause → Quit game | Confirm quitting the app |
 
 Pickup prompts accept touch or left/right plus A; B/Start cancels.
 Room warps, test supplies and reset are development tools in the pause menu.
@@ -109,8 +127,12 @@ backgrounds from `build/bg`, converted assets from `nitrofiles`, and room script
 metadata from `build/room`; keep these outputs after conversion.
 
 The locally built APK **contains game data**. Do not commit or distribute it,
-extracted disc files or converted assets. An asset-import workflow for a
-source-only distributable app remains future work.
+extracted disc files or converted assets. The intended release is a standalone APK with an on-device import workflow:
+users place their own Leon and Claire disc dumps in an Android folder, select it
+in the app, and complete a one-time validation/conversion step. Subsequent launches
+use the prepared data. The importer, Claire conversion/runtime support, supported
+dump formats and revision coverage still need implementation and validation.
+There is no working on-device importer in this preview.
 
 ## Validation
 

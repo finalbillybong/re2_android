@@ -1,5 +1,10 @@
 // re2ds - effect sprites (see effect.h).
+#ifdef RE2_HEADLESS
+#include "portable_angles.h"
+#else
 #include <nds.h>
+#endif
+#include "effect_snapshot.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,23 +43,31 @@ static uint8_t *data;
 static const EffectAnim *anims;
 static const EffectFrame *frames;
 static int num_anims;
+#ifndef RE2_HEADLESS
 static int tex = -1;
+#endif
 static Sprite sprites[MAX_SPRITES];
 int effect_status, effect_spawned; // diagnostics: 1 loaded, 2 texture ok
 
 void effect_load(void)
 {
+    if(data)return;
     uint32_t size;
     data = asset_load("nitro:/effect/core.bin", &size);
-    if (!data || *(uint32_t *)data != EFFECT_MAGIC) {
+    if (!data || size<8 || *(uint32_t *)data != EFFECT_MAGIC) {
         asset_free(data);
         data = NULL;
         return;
     }
     num_anims = *(uint16_t *)(data + 4);
     int num_frames = *(uint16_t *)(data + 6);
+    if(8u+(uint32_t)num_anims*8+(uint32_t)num_frames*8+32+32768>size){asset_free(data);data=NULL;return;}
     anims = (const EffectAnim *)(data + 8);
     frames = (const EffectFrame *)(anims + num_anims);
+    for(int i=0;i<num_anims;i++)if(!anims[i].count||anims[i].first+anims[i].count>num_frames){asset_free(data);data=NULL;return;}
+#ifdef RE2_HEADLESS
+    effect_status=2;
+#else
     const uint16_t *palette = (const uint16_t *)(frames + num_frames);
     const uint8_t *texels = (const uint8_t *)(palette + 16);
     DC_FlushRange(data, size);
@@ -65,6 +78,7 @@ void effect_load(void)
                      TEXGEN_TEXCOORD | GL_TEXTURE_COLOR0_TRANSPARENT, texels))
         effect_status = 2;
     glColorTableEXT(0, 0, 16, 0, 0, palette);
+#endif
 }
 
 void effect_clear(void)
@@ -154,6 +168,7 @@ int effect_count(void)
     return n;
 }
 
+#ifndef RE2_HEADLESS
 void effect_draw(const int32_t cam_from[3], const int32_t cam_to[3])
 {
     if (!data || !effect_count())
@@ -208,4 +223,19 @@ void effect_draw(const int32_t cam_from[3], const int32_t cam_to[3])
         glPopMatrix(1);
     }
     glColor3b(255, 255, 255);
+}
+
+#endif
+int effect_snapshot(int *out,int capacity){
+    int count=0;
+    for(int i=0;i<MAX_SPRITES&&count<capacity;i++){
+        const Sprite *s=&sprites[i];if(!s->active)continue;
+        const EffectFrame *fr=&frames[anims[s->anim].first+s->frame];
+        int *p=out+count++*FX_RECORD_SIZE,h=fr->side*WORLD_PER_TEXEL/2;
+        p[0]=0;p[1]=anims[s->anim].effect;p[2]=0;
+        p[3]=s->x;p[4]=s->y;p[5]=s->z;p[6]=-h;p[7]=-h;p[8]=h;p[9]=h;
+        p[10]=fr->u;p[11]=fr->v;p[12]=fr->u+fr->side;p[13]=fr->v+fr->side;
+        p[14]=s->r;p[15]=s->g;p[16]=s->b;p[17]=214;p[18]=TOWARD_CAMERA;
+    }
+    return count;
 }

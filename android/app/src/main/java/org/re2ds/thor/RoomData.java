@@ -40,7 +40,7 @@ final class RoomData {
         int[] parents;
         float[][] positions;
         short[][] frames;
-        int[][] animations;
+        int[][] animations, animationFlags;
         final List<Mesh> meshes = new ArrayList<>();
         Pixels[] textures;
     }
@@ -202,11 +202,12 @@ final class RoomData {
         }
         m.frames=new short[frames][6+3*m.bones];
         for(int f=0;f<frames;f++) for(int j=0;j<m.frames[f].length;j++) m.frames[f][j]=b.getShort(of+f*m.frames[f].length*2+j*2);
-        m.animations=new int[anims][];
+        m.animations=new int[anims][];m.animationFlags=new int[anims][];
         for(int a=0;a<anims;a++) {
-            int first=u16(b,oa+a*4), count=u16(b,oa+a*4+2); m.animations[a]=new int[count];
+            int first=u16(b,oa+a*4), count=u16(b,oa+a*4+2); m.animations[a]=new int[count];m.animationFlags[a]=new int[count];
             for(int k=0;k<count;k++) {
-                int index=u16(b,oa+anims*4+(first+k)*2)&4095;
+                int entry=u16(b,oa+anims*4+(first+k)*2);
+                int index=entry&4095;m.animationFlags[a][k]=entry&0xf000;
                 require(index<frames,"Animation references missing frame");m.animations[a][k]=index;
             }
         }

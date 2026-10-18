@@ -14,13 +14,19 @@ import javax.microedition.khronos.opengles.GL10;
 
 final class RoomRenderer implements GLSurfaceView.Renderer {
     final RoomData data;
+    EffectsData effectData;
+    volatile int[] effects=new int[0];
+    private final float[] effectVertices=new float[30];
+    private final FloatBuffer effectBuffer=ByteBuffer.allocateDirect(120).order(ByteOrder.nativeOrder()).asFloatBuffer();
+    private final int[] effectOrder=new int[512];
     volatile RoomSession.Pose pose;
     volatile DoorAnimation door;
     volatile int doorFrame;
     volatile int[] objects=new int[0];
+    volatile RoomActors.Actor[] actors=RoomActors.EMPTY;
     private final IdentityHashMap<RoomData.Pixels,Integer> textures=new IdentityHashMap<>();
     private final IdentityHashMap<float[],FloatBuffer> buffers=new IdentityHashMap<>();
-    private int program,position,uv,mvp,brightness,viewportW,viewportH,viewportX,viewportY;
+    private int program,position,uv,mvp,brightness,tint,viewportW,viewportH,viewportX,viewportY;
     private final float[] identity=new float[16],view=new float[16],projection=new float[16],pv=new float[16],world=new float[16],temp=new float[16];
     private final float[][] bones=new float[64][16];
     private final float[] background={-1,1,0,0,0, -1,-1,0,0,1, 1,-1,0,1,1, -1,1,0,0,0, 1,-1,0,1,1, 1,1,0,1,0};
@@ -30,10 +36,11 @@ final class RoomRenderer implements GLSurfaceView.Renderer {
     @Override public void onSurfaceCreated(GL10 gl,EGLConfig config){
         textures.clear();buffers.clear();
         int v=shader(GLES20.GL_VERTEX_SHADER,"attribute vec3 position; attribute vec2 uv; uniform mat4 mvp; varying vec2 tex; void main(){tex=uv;gl_Position=mvp*vec4(position,1.0);}");
-        int f=shader(GLES20.GL_FRAGMENT_SHADER,"precision mediump float; varying vec2 tex; uniform sampler2D image; uniform float brightness; void main(){vec4 c=texture2D(image,tex);if(c.a<0.5)discard;gl_FragColor=vec4(c.rgb*brightness,c.a);}");
+        int f=shader(GLES20.GL_FRAGMENT_SHADER,"precision mediump float; varying vec2 tex; uniform sampler2D image; uniform float brightness; uniform vec4 tint; void main(){vec4 c=texture2D(image,tex);if(c.a<0.5)discard;gl_FragColor=vec4(c.rgb*brightness,c.a)*tint;}");
         program=GLES20.glCreateProgram();GLES20.glAttachShader(program,v);GLES20.glAttachShader(program,f);GLES20.glLinkProgram(program);
         int[] ok=new int[1];GLES20.glGetProgramiv(program,GLES20.GL_LINK_STATUS,ok,0);if(ok[0]==0)throw new IllegalStateException(GLES20.glGetProgramInfoLog(program));
         GLES20.glDeleteShader(v);GLES20.glDeleteShader(f);
+        tint=GLES20.glGetUniformLocation(program,"tint");
         brightness=GLES20.glGetUniformLocation(program,"brightness");
         position=GLES20.glGetAttribLocation(program,"position");uv=GLES20.glGetAttribLocation(program,"uv");mvp=GLES20.glGetUniformLocation(program,"mvp");
         GLES20.glUseProgram(program);GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"image"),0);
@@ -79,10 +86,55 @@ final class RoomRenderer implements GLSurfaceView.Renderer {
             for(RoomData.Mesh mesh:animation.model.meshes)if(mesh.bone==part)draw(mesh.triangles,animation.model.textures[mesh.page],temp);
         }
     }
+    private void drawModel(RoomData.Model m,short[] frame){
+        for(int i=0;i<m.bones;i++){
+            float[] parent=m.parents[i]<0?world:bones[m.parents[i]];System.arraycopy(parent,0,bones[i],0,16);
+            if(m.parents[i]<0)Matrix.translateM(bones[i],0,frame[0],frame[1],frame[2]);else Matrix.translateM(bones[i],0,m.positions[i][0],m.positions[i][1],m.positions[i][2]);
+            Matrix.rotateM(bones[i],0,frame[6+i*3]*360f/32768,1,0,0);Matrix.rotateM(bones[i],0,frame[7+i*3]*360f/32768,0,1,0);Matrix.rotateM(bones[i],0,frame[8+i*3]*360f/32768,0,0,1);
+        }
+        for(RoomData.Mesh mesh:m.meshes){Matrix.multiplyMM(temp,0,pv,0,bones[mesh.bone],0);draw(mesh.triangles,m.textures[mesh.page],temp);}
+    }
+    private void drawEffects(RoomData.Camera camera){
+        int[] fx=effects;if(effectData==null||fx.length==0)return;
+        float fxDir=camera.to[0]-camera.from[0],fy=camera.to[1]-camera.from[1],fz=camera.to[2]-camera.from[2];
+        float length=(float)Math.sqrt(fxDir*fxDir+fy*fy+fz*fz);if(length<1)return;
+        fxDir/=length;fy/=length;fz/=length;
+        float rightLength=(float)Math.sqrt(fxDir*fxDir+fz*fz);if(rightLength<.0001f)return;
+        float rx=fz/rightLength,rz=-fxDir/rightLength;
+        float dx=-rz*fy,dy=rz*fxDir-rx*fz,dz=rx*fy;
+        if(dy<0){dx=-dx;dy=-dy;dz=-dz;}
+        int count=Math.min(effectOrder.length,fx.length/EffectsData.STRIDE);
+        for(int i=0;i<count;i++){
+            int o=i*EffectsData.STRIDE,j=i;
+            float depth=fx[o+3]*fxDir+fx[o+4]*fy+fx[o+5]*fz;
+            while(j>0){int prior=effectOrder[j-1];float d=fx[prior+3]*fxDir+fx[prior+4]*fy+fx[prior+5]*fz;if(d>=depth)break;effectOrder[j]=prior;j--;}
+            effectOrder[j]=o;
+        }
+        GLES20.glEnable(GLES20.GL_BLEND);GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA,GLES20.GL_ONE_MINUS_SRC_ALPHA);GLES20.glDepthMask(false);
+        GLES20.glUniformMatrix4fv(mvp,1,false,pv,0);
+        for(int i=0;i<count;i++){
+            int o=effectOrder[i];RoomData.Pixels page=effectData.texture(fx[o],fx[o+1],fx[o+2]);
+            float x=fx[o+3]-fxDir*fx[o+18],y=fx[o+4]-fy*fx[o+18],z=fx[o+5]-fz*fx[o+18];
+            for(int v=0;v<6;v++){
+                int corner=v<3?v:v==3?0:v==4?2:3;
+                boolean right=corner==1||corner==2,bottom=corner>=2;
+                float sx=fx[o+(right?8:6)],sy=fx[o+(bottom?9:7)];int at=v*5;
+                effectVertices[at]=x+rx*sx+dx*sy;effectVertices[at+1]=y+dy*sy;effectVertices[at+2]=z+rz*sx+dz*sy;
+                effectVertices[at+3]=fx[o+(right?12:10)]/256f;effectVertices[at+4]=fx[o+(bottom?13:11)]/(float)page.height;
+            }
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,texture(page));
+            GLES20.glUniform4f(tint,fx[o+14]/255f,fx[o+15]/255f,fx[o+16]/255f,fx[o+17]/255f);
+            effectBuffer.clear();effectBuffer.put(effectVertices).position(0);
+            GLES20.glVertexAttribPointer(position,3,GLES20.GL_FLOAT,false,20,effectBuffer);
+            effectBuffer.position(3);GLES20.glVertexAttribPointer(uv,2,GLES20.GL_FLOAT,false,20,effectBuffer);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,6);
+        }
+        GLES20.glDepthMask(true);GLES20.glDisable(GLES20.GL_BLEND);GLES20.glUniform4f(tint,1,1,1,1);
+    }
     @Override public void onDrawFrame(GL10 gl){
         RoomSession.Pose p=pose;RoomData.Camera c=data.cameras[p.camera];
         GLES20.glViewport(viewportX,viewportY,viewportW,viewportH);GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT|GLES20.GL_DEPTH_BUFFER_BIT);GLES20.glUseProgram(program);
-        GLES20.glUniform1f(brightness,1);
+        GLES20.glUniform1f(brightness,1);GLES20.glUniform4f(tint,1,1,1,1);
         DoorAnimation active=door;
         if(active!=null){drawDoor(active,Math.min(doorFrame,active.frames-1));return;}
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);draw(background,c.background,identity);
@@ -91,13 +143,14 @@ final class RoomRenderer implements GLSurfaceView.Renderer {
         float near=204.8f,w=near*160/c.screen,h=near*120/c.screen;
         Matrix.frustumM(projection,0,-w,w,-h,h,near,65536);Matrix.multiplyMM(pv,0,projection,0,view,0);
         Matrix.setIdentityM(world,0);Matrix.translateM(world,0,p.x,p.y,p.z);Matrix.rotateM(world,0,p.direction*360/32768,0,1,0);
-        RoomData.Model m=data.models[p.weapon];int[] seq=m.animations[p.animation];short[] frame=m.frames[seq[p.key%seq.length]];
-        for(int i=0;i<m.bones;i++){
-            float[] parent=m.parents[i]<0?world:bones[m.parents[i]];System.arraycopy(parent,0,bones[i],0,16);
-            if(m.parents[i]<0)Matrix.translateM(bones[i],0,frame[0],frame[1],frame[2]);else Matrix.translateM(bones[i],0,m.positions[i][0],m.positions[i][1],m.positions[i][2]);
-            Matrix.rotateM(bones[i],0,frame[6+i*3]*360f/32768,1,0,0);Matrix.rotateM(bones[i],0,frame[7+i*3]*360f/32768,0,1,0);Matrix.rotateM(bones[i],0,frame[8+i*3]*360f/32768,0,0,1);
+        RoomData.Model m=data.models[p.weapon];int[] seq=m.animations[p.animation];short[] frame=p.frame!=null?p.frame:m.frames[seq[p.key%seq.length]];
+        drawModel(m,frame);
+        for(RoomActors.Actor actor:actors){
+            Matrix.setIdentityM(world,0);Matrix.translateM(world,0,actor.x,actor.y,actor.z);
+            Matrix.rotateM(world,0,actor.direction*360f/32768,0,1,0);
+            if(actor.flinch!=0)Matrix.rotateM(world,0,-actor.flinch*220*360f/32768,0,0,1);
+            drawModel(actor.model,actor.frame);
         }
-        for(RoomData.Mesh mesh:m.meshes){Matrix.multiplyMM(temp,0,pv,0,bones[mesh.bone],0);draw(mesh.triangles,m.textures[mesh.page],temp);}
         int[] placed=objects;
         for(int i=0;i<placed.length;i+=9){
             int index=placed[i];if(index<0||index>=data.objects.length)continue;
@@ -112,5 +165,6 @@ final class RoomRenderer implements GLSurfaceView.Renderer {
             Matrix.multiplyMM(temp,0,pv,0,world,0);draw(mesh.triangles,mesh.texture,temp);
         }
         if(c.mask!=null)draw(c.mask.triangles,c.mask.atlas,pv);
+        drawEffects(c);
     }
 }

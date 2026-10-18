@@ -20,6 +20,8 @@ GRADLE_USER_HOME="${GRADLE_USER_HOME:-$TOOLCHAIN/gradle-user}"
 ANDROID_USER_HOME="${ANDROID_USER_HOME:-$TOOLCHAIN/user}"
 export GRADLE_USER_HOME ANDROID_USER_HOME
 python3 -I "$ROOT/tools/prepare_android_assets.py"
+python3 -I "$ROOT/tests/android_audio_host.py"
+python3 -I "$ROOT/tests/android_masks_host.py"
 cd "$ROOT/android"
 ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
 mkdir -p "$ROOT/build/android"

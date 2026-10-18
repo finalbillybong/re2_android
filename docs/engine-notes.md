@@ -127,3 +127,119 @@ picture n shows item n. The PS1 shows them on pickup and on CHECK. `tools/itps2d
 ## 9. Item use, reloading, effects of a shot
 
 See [player-control.md](player-control.md), section 5.
+
+
+## Android Kendo correction (0.16, original NTSC-U executable)
+
+The SCD scheduler at `0x8005003c` calls `0x8004f788` after processing all
+threads. At `0x8004f7b0`, that helper clears `0x800cc9a4`, the second word
+of flag array 5 (its pointer is in the flag table at `0x8009fd38`). Thus
+arrival flags 32–63 last one script pass; flags 0–31 remain persistent.
+Previously, repeated waits on 0x20/0x21 completed using stale arrivals,
+interrupting Kendo's walk and advancing the lock sound too soon. `script_tick`
+now clears that word after its thread pass. Loop back-edges must not insert an
+extra yield: the original wait functions already contain `evt_next`, and an
+extra yield can miss an arrival pulse. The instruction budget still bounds
+loops that do not yield.
+
+Android's asset reader incorrectly validated RBJ frame bytes as skeleton bones.
+Animation-only RMD1 files have zero texture pages and equal bones/lists/frames
+offsets; their bone count describes rotations, with the owning actor supplying
+the skeleton. They must bypass skeleton validation, while retaining frame and
+animation bounds checks. Tests now verify a Kendo RBJ motion reaches the actual
+rendered pose rather than merely observing that some actor animation changes.
+
+Room 101 camera 11 has twelve foreground mask pieces with order-table depth
+zero. Unprojecting those at distance zero collapses them to the eye. The mask
+converter preserves their original screen rectangles at distance 256, beyond
+the 204.8 near plane. Android staging regenerates near-depth masks from the
+original rectangles, so older converted caches cannot retain the degenerate
+geometry. A projection check covers every gun-shop mask corner, including all
+twelve foreground pieces.
+
+## Android zombie appearance selection (NTSC-U)
+
+The SCE_EM_SET byte at offset 8 was previously discarded. The NTSC-U handler
+0x800539f0 stores it at actor+0x1cf. Type 0x1f initialization in CDEMD0.EMS
+(slot-0 overlay, 0x80100df8–0x8010101c) selects a body appearance 1–3 when
+unspecified and honors a nonzero low-six-bit selector. Calls to 0x80016a58
+replace body texture pages and CLUT rows; bones 8 (head), 11 and 14 (hands)
+retain their authored textures. The Android snapshot adds the resolved appearance
+at index 107; the Java model cache includes it in the key. The common spawn
+bridge carries the selector in flags bits 16–23, separate from the original
+16-bit enemy flags. Original PS1 RNG sequence equivalence is not implemented.
+
+
+### Android item Use (v0.20)
+
+`world_use_item` owns the atomic native health/consumption operation and door-key
+reach check. `combat_heal` changes only HP, preserving animation, ammo, shot and
+grab/death state. JNI refreshes Java health immediately while paused. Item IDs
+were checked against names extracted from the local NTSC-U executable (spray
+0x23, herbs 0x26–0x2e). Pure-blue poison treatment, puzzle scripting and exhausted
+key discard are not implemented. Door key checks currently use converted door
+metadata, consistent with the existing exploration fallback outside room 101.
+
+
+### Android opening-route integration (v0.21)
+
+Supported route: stage 1 rooms 100, 101, 102, 118, 119, 11A, 11B, 103. Main
+SCD function 1 now has an independent recurring context, started after function
+0 completes; event slots remain independent and EVT_NEXT retains its yield.
+The Android bridge invokes this only for enabled story rooms.
+
+NTSC-U opcode table found at executable file offset 0x9014c. Opcode 0x61 points
+to 0x800512b0: it finds the first 20-byte RVD record whose cam0 equals argument
+1, advances by argument 2 records, and writes argument 3 to the enable byte.
+Converted RoomSwitch.role bit 1 stores disabled status without changing the
+binary layout. Staging restores original flags from room JSON for older caches.
+
+NTSC zombie substate handler 0x80103c14 sets main animation 0x15 and key 0,
+then substate 4 advances it (0x80103c9c); completion reaches normal pursuit.
+Room 119 function 6 writes routine 1/state 8/substate 3 before releasing the
+hold flag. Previously member 4 was ignored and the zombies kept feeding.
+
+`tests/route_host.c` uses the user's original converted NTSC-U room scripts;
+it does not replace events with hardcoded cutscenes. Its door traversal checks
+native destinations, not physical controller navigation through collision.
+On-device traversal remains necessary before claiming route fidelity.
+
+
+### Encounter validation and v0.22 corrections
+
+Do not treat event flags, sound playback or successful room transitions as proof
+that an encounter is ported. Trace the original SCD commands and relevant
+executable/overlay handlers; distinguish unknown opcodes from known opcodes that
+are still silently skipped. Validate the animation samples sent through the
+actual Android render bridge, control return, post-event visibility and room
+re-entry. Hardware testing is a final integration check, not a substitute for
+reading the original encounter data.
+
+Kendo's attack reset routine 8's substate to zero after selecting mode 2. The
+port initialized the mode too early and then failed to reinitialize on substate
+zero. It never reached the hold key that assigns the victim's death animation.
+The regression now compares the rendered Kendo skeleton with the final frame of
+the original zombie victim animation, and checks his RBJ body pose on re-entry.
+The dead-person spawn uses the authored SCE_EM_SET motion tail (room bank 1,
+translated to PLC room-animation mode 0); Kendo's own model has only seven
+animations, so the body motion 7 belongs to the room animation set.
+
+Removed Android's whole-actor collision-box occlusion heuristic. It depended on
+walls between Leon and the camera, so walking could remove Kendo and zombies
+from render snapshots. Original mask geometry and the GPU depth test now handle
+occlusion without dropping complete actors. Tests exercise all shop cameras
+and player positions around Kendo, including after control returns.
+
+NTSC 0x80050b50 implements WORK_COPY as a byte/halfword write to next-PC + offset;
+0x80052a68 implements DIR_CK using the current work object's facing. These were
+previously skipped/forced true. Bounded operand patching and facing checks now
+support Kendo's tracking script and the route's dynamic operands. This exposed
+the courtyard's ninth enemy slot; Android now supports the original 32 slots.
+
+Shove contact occurs during release keys 7–24 (0x80102d20..0x80102dcc), starting
+state 9 on a standing zombie. The state-9 overlay applies a 400-unit impulse
+with 30-unit deceleration and usually proceeds to a fall. Swept contact uses
+both characters' radii; hidden, scripted, dead/lying, different-height actors
+and NPCs are excluded. Ordinary walking collision remains separate. The prior
+v0.21 feeding animation comment misread 0x000f0015: its key is zero, not 15;
+that start frame is corrected as well.

@@ -1,5 +1,10 @@
 // re2ds - room effect sprites (see roomfx.h).
+#ifdef RE2_HEADLESS
+#include "portable_angles.h"
+#else
 #include <nds.h>
+#endif
+#include "effect_snapshot.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -85,7 +90,9 @@ static int parse(uint8_t *blob, uint32_t size, Effect *out, int max)
         p += (4 - ((p - (blob + f->e->offset)) & 3)) & 3;
         f->texels = p;
     }
+#ifndef RE2_HEADLESS
     DC_FlushRange(blob, size);
+#endif
     return n;
 }
 static Instance inst[MAX_INSTANCES];
@@ -104,6 +111,7 @@ void roomfx_load(int stage, int room)
                     f->owner = j;
         }
     }
+#ifndef RE2_HEADLESS
     for (int i = MAX_EFFECTS; i < MAX_EFFECTS + num_core; i++) { // textures again per room
         Effect *f = &effects[i];
         if (f->tex && f->owner < 0)
@@ -122,6 +130,7 @@ void roomfx_load(int stage, int room)
             if (effects[i].pal[r])
                 glDeleteTextures(1, &effects[i].pal[r]);
     }
+#endif
     memset(effects, 0, MAX_EFFECTS * sizeof(Effect));
     memset(inst, 0, sizeof(inst));
     num_effects = tex_used = 0;
@@ -141,6 +150,9 @@ void roomfx_load(int stage, int room)
 // texture and palettes on first use, the room's within the budget
 static int upload(Effect *f)
 {
+#ifdef RE2_HEADLESS
+    return f->e->frames>0;
+#else
     if (f->tex || f->failed)
         return f->tex != 0;
     int bytes = 128 << f->e->log2, core = f >= effects + MAX_EFFECTS;
@@ -178,6 +190,7 @@ palettes:;
     glBindTexture(0, f->tex);
     glAssignColorTable(0, f->pal[0]);
     return 1;
+#endif
 }
 
 // the room's effect with this id, else the core one
@@ -344,6 +357,7 @@ int roomfx_count(void)
     return c;
 }
 
+#ifndef RE2_HEADLESS
 void roomfx_draw(const int32_t cam_from[3], const int32_t cam_to[3])
 {
     if (!roomfx_count())
@@ -414,4 +428,24 @@ void roomfx_draw(const int32_t cam_from[3], const int32_t cam_to[3])
         }
         glPopMatrix(1);
     }
+}
+
+#endif
+int roomfx_snapshot(int *out,int capacity){
+    int count=0;
+    for(int i=0;i<MAX_INSTANCES&&count<capacity;i++){
+        const Instance *n=&inst[i];if(!n->active)continue;
+        const Effect *fx=&effects[n->effect];const Frame *fr=&fx->frames[n->frame];
+        for(int j=fr->sprite;j<fr->sprite+fr->count&&j<fx->e->sprites&&count<capacity;j++){
+            const Sprite *s=&fx->sprites[j];int *p=out+count++*FX_RECORD_SIZE;
+            float k=WORLD_PER_TEXEL*n->scale/4096.f;
+            int left=s->x,right=s->x+fr->size,u0=s->u,u1=s->u+fr->size;
+            if(n->flags&SUB_MIRRORED){left=-right;right=-s->x;u0=u1;u1=s->u;}
+            p[0]=1;p[1]=fx->e->id;p[2]=n->row<fx->e->palettes?n->row:0;
+            p[3]=n->x;p[4]=n->y;p[5]=n->z;p[6]=left*k;p[7]=s->y*k;p[8]=right*k;p[9]=(s->y+fr->size)*k;
+            p[10]=u0;p[11]=s->v;p[12]=u1;p[13]=s->v+fr->size;
+            p[14]=p[15]=p[16]=255;p[17]=230;p[18]=TOWARD_CAMERA;
+        }
+    }
+    return count;
 }

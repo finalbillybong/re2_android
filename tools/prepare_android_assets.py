@@ -1,4 +1,4 @@
-"""Stage the user's converted opening three rooms for the local Android APK."""
+"""Stage the user's converted rooms and original artwork for the local Android APK."""
 from pathlib import Path
 import shutil
 import json
@@ -8,6 +8,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from imgio import read_ppm
 from rdt2json import read_doors
+from stage_android_audio import stage_audio
+from stage_android_voice import stage_voice
 
 ROOT = Path(__file__).resolve().parents[1]
 source = ROOT / "nitrofiles"
@@ -20,6 +22,9 @@ background_count = 0
 files = [source / "room/index.bin", source / "menu/items.bin", source / "menu/pictures.bin"]
 for model in ("leon", "leon_w01", "leon_w02"):
     files += [source / f"model/{model}.bin", source / f"model/{model}_tex.bin"]
+files += list((source / "model").glob("em*.bin"))
+
+files += [source / "effect/core.bin", source / "effect/core_fx.bin", source / "sound/enem_pairs.bin"]
 for stage, room_id in room_entries:
     prefix = f"room{stage}{room_id:02x}"
     room = source / f"room/{prefix}0.bin"
@@ -27,6 +32,10 @@ for stage, room_id in room_entries:
     if struct.unpack_from("<IH", data) != (0x314D5252, 4):
         raise SystemExit(f"Convert the disc first: invalid {room}")
     files.append(room)
+    if stage == 1 and room_id in (0,1,2,3,0x18,0x19,0x1a,0x1b):
+        files += list((source / "room").glob(f"{prefix}0_esp.bin"))
+        files += list((source / "room").glob(f"{prefix}0_rbj*.bin"))
+        files += list((source / "room").glob(f"{prefix}0_blk.bin"))
     objects = source / f"room/{prefix}0_obj.bin"
     if objects.exists(): files.append(objects)
     for camera in range(data[6]):
@@ -59,13 +68,35 @@ print(f"Staged {len(files)} local game assets ({sum(p.stat().st_size for p in fi
 
 print(f"Staged {background_count} original 320×240 RGB backgrounds without resampling or palette reduction")
 
+# Rebuild near/zero-depth mask geometry from the original screen rectangles.
+# Old converted files lost these rectangles by collapsing all four corners to
+# the camera; copying those files would keep holes in the gun-shop counter.
+for stage, room_id in room_entries:
+    prefix = f"room{stage}{room_id:02x}"
+    metadata_path = ROOT / f"build/room/ROOM{stage}{room_id:02X}0.json"
+    metadata = json.loads(metadata_path.read_text())
+    # Preserve authored RVD enable bytes even with an older converted cache.
+    staged_room = target / f"room/{prefix}0.bin"
+    raw = bytearray(staged_room.read_bytes())
+    offset = 60 + raw[6] * 28
+    assert len(metadata["camera_switches"]) == raw[7]
+    for i, zone in enumerate(metadata["camera_switches"]):
+        at = offset + i * 20 + 3
+        raw[at] = (raw[at] & ~2) | (0 if zone["flag"] else 2)
+    staged_room.write_bytes(raw)
+    if any(m["depth"] < 8 for c in metadata["cameras"] for m in c["masks"]):
+        subprocess.run([sys.executable, "-I", str(ROOT / "tools/mask2ds.py"),
+                        str(metadata_path), str(ROOT / f"build/mask/{prefix}"),
+                        str(target / f"mask/{prefix}")], check=True, stdout=subprocess.DEVNULL)
+
+
 # Evaluate the existing door interpreter at NTSC's 60 Hz and retain the original
 # geometry, textures, part hierarchy and fades. Tracks contain transforms, not video.
 exporter = ROOT / "build/android-tools/door_export"
 exporter.parent.mkdir(parents=True, exist_ok=True)
 subprocess.run(["cc", "-O2", "-DDOOR_HZ=60", "-Itests/stubs", "-Isource",
                 "tests/door_host.c", "source/script.c", "source/inventory.c",
-                "-o", str(exporter)], cwd=ROOT, check=True)
+                "-lm", "-o", str(exporter)], cwd=ROOT, check=True)
 door_dir = target / "door"
 door_dir.mkdir(parents=True, exist_ok=True)
 tracks = set()
@@ -94,3 +125,7 @@ for kind, variant in sorted(tracks):
 (door_dir / "index.bin").write_bytes(struct.pack("<I", len(manifest)) +
                                       b"".join(struct.pack("<5B", *entry) for entry in manifest))
 print(f"Staged {len(tracks)} original NTSC door animation tracks for {len(manifest)} doorways")
+
+stage_audio(source, target)
+
+stage_voice(ROOT, target)

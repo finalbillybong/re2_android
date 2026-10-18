@@ -99,7 +99,7 @@ def main():
     for sw, role in zip(switches, room["_roles"]):
         xs = [p[0] for p in sw["quad_xz"]]
         zs = [p[1] for p in sw["quad_xz"]]
-        out += struct.pack("<4B4h4h", sw["cam0"], sw["cam1"], sw["floor"], role, *xs, *zs)
+        out += struct.pack("<4B4h4h", sw["cam0"], sw["cam1"], sw["floor"], role | (0 if sw["flag"] else 2), *xs, *zs)
     for b in boxes:
         out += struct.pack("<hhHHHHHHI", b["x"], b["z"], b["w"], b["d"], b["shape"], b["flag"],
                            b["type"], 0, sum(1 << f for f in b["floors"]))

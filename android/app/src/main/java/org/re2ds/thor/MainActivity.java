@@ -36,6 +36,14 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
     private final List<ProbePanel> panels = new ArrayList<>();
     private RoomData room;
     private RoomCatalog rooms;
+    private RoomActors actorAssets;
+    private RoomActors.Actor[] worldActors=RoomActors.EMPTY;
+    private EffectsData effectData;
+    private CombatAudio combatAudio;
+    private StoryVoice storyVoice;
+    private StoryState story;
+    private Bundle roomCheckpoint;
+    private int[] worldEffects=new int[0];
     private int[] triggers=new int[0];
     private float scriptTime;
     private boolean worldMessage;
@@ -44,15 +52,18 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
     private int[] worldObjects=new int[0];
     private String actionHint="Explore the street; A interacts with nearby doors and items";
     private RoomSession session;
+    private CombatState combat;
     private int combineFrom = -1;
+    private final InventoryActions itemActions=new InventoryActions();
     private boolean running;
     private boolean pauseMenu;
+    private boolean quitPrompt,quitYes,quitWasPaused;
     private boolean doorAnimations=true;
     private DoorAnimation.Catalog doors;
     private DoorAnimation activeDoor;
     private float doorTime;
     private int pausePage,pauseSelection,roomPage;
-    private static final String[] PAUSE_ITEMS={"Resume","Inventory","Interact","Explore rooms","Swap screens","Test supplies","Reset exploration","Door animations: On"};
+    private static final String[] PAUSE_ITEMS={"Resume","Inventory","Interact","Explore rooms","Swap screens","Test supplies","Reset exploration","Door animations: On","Quit game"};
     private static final String[] ROOM_ITEMS={"Opening street","Gun shop","Alley","All rooms","Back"};
     private String message = "Select an item to pause and manage inventory";
     private DisplayManager manager;
@@ -67,7 +78,11 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         @Override public void run() {
             if (!resumed) return;
             long now = SystemClock.uptimeMillis();
-            if (screensOn() && session != null) {
+            boolean displaysAwake=screensOn();
+            if(combatAudio!=null)combatAudio.setMenuEnabled(displaysAwake);
+            if(combatAudio!=null)combatAudio.setRunning(displaysAwake&&!state.paused);
+            if(storyVoice!=null)storyVoice.setRunning(displaysAwake&&!state.paused);
+            if (displaysAwake && session != null) {
                 int[] inventory = NativeInventory.snapshot();
                 int equipped = inventory[16] < 0 ? 0 : inventory[inventory[16]*2];
                 float seconds=(now-previousFrame)/1000f;
@@ -75,18 +90,39 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
                     doorTime+=Math.min(.05f,Math.max(0,seconds));
                     if(doorTime*activeDoor.fps>=activeDoor.frames){activeDoor=null;resumeGameplay();}
                 }
-                session.step(seconds,state.axisX,state.axisY,running,state.paused,equipped);
                 if(!state.paused) {
                     scriptTime+=Math.min(.05f,Math.max(0,seconds));
-                    while(scriptTime>=1f/30){scriptTime-=1f/30;NativeWorld.tick((int)session.x,(int)session.y,(int)session.z,(int)session.direction,session.camera);}
+                    while(scriptTime>=1f/30){
+                        scriptTime-=1f/30;
+                        boolean locked=(story!=null&&story.locked)||state.aiming()||(combat!=null&&combat.locked);
+                        float ox=session.x,oz=session.z;
+                        session.step(1f/30,state.axisX,state.axisY,running,locked,equipped);
+                        if(NativeCombat.blocked((int)ox,(int)oz,(int)session.x,(int)session.z)){
+                            session.x=ox;session.z=oz;session.switchCamera();
+                        }
+                        int noise=session.x!=ox||session.z!=oz?(running?4:2):0;
+                        NativeCombat.input((story==null||!story.locked)&&state.aiming(),(story==null||!story.locked)&&state.fire,state.pressed,
+                            state.axisX>.15f?1:state.axisX<-.15f?-1:0,
+                            state.axisY>.15f?1:state.axisY<-.15f?-1:0,noise);
+                        state.pressed=false;
+                        NativeWorld.tick((int)session.x,(int)session.y,(int)session.z,(int)session.direction,session.camera);
+                        if(session.footstep!=0)NativeWorld.footstep((int)session.x,(int)session.y,(int)session.z,session.footstep==2);
+                        try{combatAudio.play(NativeEffects.sounds());}catch(java.io.IOException ex){roomLoadFailed(ex);break;}
+                        combat=new CombatState(NativeCombat.snapshot());combat.apply(session);state.health.restore(combat.hp);
+                        int[] zones=NativeWorld.cameraZones();for(int i=0;i<zones.length;i++)room.zones[i].role=zones[i];
+                        story=new StoryState(NativeWorld.story());story.apply(session);
+                        try{storyVoice.play(NativeWorld.voice());}catch(java.io.IOException ex){roomLoadFailed(ex);break;}
+                        if(combat.finished){openPauseMenu();break;}
+                    }
                     String text=NativeWorld.message();
                     if(!text.isEmpty()){message=text;worldMessage=true;state.paused=true;state.releaseInput();}
                 } else scriptTime=0;
-                triggers=NativeWorld.triggers();worldObjects=NativeWorld.objects();updateActionHint();
+                triggers=NativeWorld.triggers();worldObjects=NativeWorld.objects();worldEffects=NativeEffects.snapshot();updateActors();updateActionHint();
                 int[] boxes=NativeWorld.boxes();for(int i=0;i<boxes.length;i++)room.boxes[i].flags=boxes[i];
             }
             previousFrame = now;
             for (ProbePanel panel : panels) {
+                if(displaysAwake&&panel.inventoryView!=null)panel.inventoryView.animateHeartbeat(now);
                 if (panel.scene != null) panel.scene.update();
                 if (now - previousText >= 150) panel.refresh();
             }
@@ -105,6 +141,9 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
             state.actions = saved.getInt("actions"); state.resumes = saved.getInt("resumes");
             state.paused = saved.getBoolean("paused"); state.swapped = saved.getBoolean("swapped");
             chosenDisplay = saved.getInt("display", -1);
+            state.health.restore(saved.getInt("hp",PlayerHealth.MAX_HP));
+            quitPrompt=saved.getBoolean("quitPrompt");quitWasPaused=saved.getBoolean("quitWasPaused");
+            quitYes=false; // Recreated confirmations always default to keeping the app open.
         }
         try {
             RoomData.Reader reader = path -> {
@@ -114,15 +153,25 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
                     return out.toByteArray();
                 }
             };
+            NativeWorld.configure(getAssets());
+            actorAssets=new RoomActors(reader);
+            effectData=new EffectsData(reader);
+            combatAudio=new CombatAudio(getAssets(),reader);
+            storyVoice=new StoryVoice(getAssets());
             doors=new DoorAnimation.Catalog(reader);
             rooms=new RoomCatalog(reader);
             int stage=saved==null?1:saved.getInt("stage",1),id=saved==null?0:saved.getInt("roomId",0);
-            room=rooms.load(stage,id);
+            room=rooms.load(stage,id);effectData=effectData.forRoom(stage,id);
             NativeInventory.reset(false);
             if(saved!=null&&saved.getIntArray("inventory")!=null)NativeInventory.restore(saved.getIntArray("inventory"));
             NativeWorld.reset();
             if(saved!=null&&saved.getByteArray("worldState")!=null)NativeWorld.restore(saved.getByteArray("worldState"));
+            roomCheckpoint=saved==null?checkpoint(room.stage,room.roomId,19800,0,300,16384,0):saved.getBundle("roomCheckpoint");
+            if(roomCheckpoint==null)roomCheckpoint=checkpoint(room.stage,room.roomId,saved.getFloat("playerX",19800),saved.getFloat("playerY"),saved.getFloat("playerZ",300),saved.getFloat("direction",16384),saved.getInt("camera"));
             if(!NativeWorld.enter(room.raw,room.stage,room.roomId))throw new IllegalStateException("Room script load failed");
+            combatAudio.room(NativeEffects.enemyBank(),1000+(room.stage-1)*256+room.roomId);
+            NativeCombat.restore(state.health.hp());
+            combat=new CombatState(NativeCombat.snapshot());
             session = new RoomSession(room);
             if (saved != null) {
                 int[] inventory=saved.getIntArray("inventory");
@@ -130,6 +179,7 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
                 session.y=saved.getFloat("playerY",0);session.x=saved.getFloat("playerX",19800);session.z=saved.getFloat("playerZ",300);
                 session.direction=saved.getFloat("direction",16384);session.camera=saved.getInt("camera",0);
             }
+            if(combat.dead){state.paused=true;pauseMenu=true;}
         } catch (Exception ex) {
             Log.e("Re2Thor","Could not load room assets",ex);
             new AlertDialog.Builder(this).setTitle("Room could not load").setMessage(ex.toString()).setPositiveButton("Close",(d,w)->finish()).show();
@@ -156,11 +206,16 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
     }
 
     @Override protected void onPause() {
+        if(combatAudio!=null)combatAudio.setMenuEnabled(false);
+        if(combatAudio!=null)combatAudio.setRunning(false);
+        if(storyVoice!=null)storyVoice.setRunning(false);
         resumed = false; state.releaseInput(); running=false;
         for(ProbePanel p:panels) if(p.scene!=null)p.scene.onPause();
         getWindow().getDecorView().removeCallbacks(frame);
         super.onPause();
     }
+
+    @Override protected void onDestroy(){if(combatAudio!=null)combatAudio.close();if(storyVoice!=null)storyVoice.close();super.onDestroy();}
 
     @Override protected void onStop() {
         manager.unregisterDisplayListener(this);
@@ -173,16 +228,24 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         saveProbeState(out);
     }
 
+    private Bundle checkpoint(int stage,int id,float x,float y,float z,float direction,int camera){
+        Bundle b=new Bundle();b.putInt("stage",stage);b.putInt("roomId",id);b.putByteArray("worldState",NativeWorld.save());
+        b.putIntArray("inventory",NativeInventory.snapshot());b.putInt("hp",state.health.hp());
+        b.putFloat("playerX",x);b.putFloat("playerY",y);b.putFloat("playerZ",z);b.putFloat("direction",direction);b.putInt("camera",camera);return b;
+    }
     private void saveProbeState(Bundle out) {
         out.putInt("slot", state.selected); out.putInt("touches", state.touches);
         out.putInt("actions", state.actions); out.putInt("resumes", state.resumes);
         out.putBoolean("paused", activeDoor==null&&state.paused); out.putBoolean("swapped", state.swapped);
         out.putInt("display", chosenDisplay);
+        out.putInt("hp",state.health.hp());out.putBoolean("quitPrompt",quitPrompt);out.putBoolean("quitWasPaused",quitWasPaused);
         if(session!=null) {
             out.putIntArray("inventory",NativeInventory.snapshot());
             out.putInt("stage",room.stage);out.putInt("roomId",room.roomId);out.putByteArray("worldState",NativeWorld.save());
             out.putFloat("playerY",session.y);out.putFloat("playerX",session.x);out.putFloat("playerZ",session.z);
             out.putFloat("direction",session.direction);out.putInt("camera",session.camera);
+            out.putBundle("roomCheckpoint",roomCheckpoint);
+            if(story!=null&&story.locked&&roomCheckpoint!=null){out.putAll(roomCheckpoint);out.putBoolean("paused",true);}
         }
     }
 
@@ -314,6 +377,14 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         if (!direction && !action && !start && !back && !KeyEvent.isGamepadButton(key)) return false;
         if(activeDoor!=null)return true;
         state.lastInput = KeyEvent.keyCodeToString(key) + (event.getAction() == KeyEvent.ACTION_UP ? " released" : " pressed");
+        if(quitPrompt){
+            if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0){
+                if(back||start)answerQuit(false);
+                else if(action)answerQuit(quitYes);
+                else if(direction)quitYes=key==KeyEvent.KEYCODE_DPAD_LEFT?true:key==KeyEvent.KEYCODE_DPAD_RIGHT?false:!quitYes;
+            }
+            refresh();return true;
+        }
         if(pauseMenu){
             if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0){
                 if(start||back)resumeGameplay();
@@ -330,21 +401,40 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
             }
             refresh();return true;
         }
+        if(state.paused&&itemActions.open){
+            if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0){
+                if(start)resumeGameplay();
+                else if(itemChecking()){if(action||back)closeItemCheck();}
+                else if(back){itemActions.close();menuSound(6);}
+                else if(direction){itemActions.move(key==KeyEvent.KEYCODE_DPAD_UP||key==KeyEvent.KEYCODE_DPAD_LEFT?-1:1);menuSound(4);}
+                else if(action)itemCommand(itemActions.selected);
+            }
+            refresh();return true;
+        }
+        if(!state.paused){
+            boolean down=event.getAction()==KeyEvent.ACTION_DOWN;
+            if(down&&event.getRepeatCount()==0)state.pressed=true;
+            if(key==KeyEvent.KEYCODE_BUTTON_R1){state.aimBumper=down;return true;}
+            if(key==KeyEvent.KEYCODE_BUTTON_R2){state.aimButton=down;return true;}
+            if(action&&(state.aiming()||(combat!=null&&(combat.grabbed||combat.dead)))){
+                state.fire=down;return true;
+            }
+        }
+        if(action&&event.getAction()==KeyEvent.ACTION_UP)state.fire=false;
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             if (direction) {
                 int dx = key == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : key == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 0;
                 int dy = key == KeyEvent.KEYCODE_DPAD_DOWN ? 1 : key == KeyEvent.KEYCODE_DPAD_UP ? -1 : 0;
-                if (state.paused) state.selected = Math.floorMod(state.selected + dx + dy * 2, 8);
+                if (state.paused) {state.selected = Math.floorMod(state.selected + dx + dy * 2, 8);menuSound(4);}
                 else { if(dx!=0)state.axisX=dx; if(dy!=0)state.axisY=dy; }
             } else if (event.getRepeatCount() == 0) {
                 if (start) { togglePause(); }
-                if (back) { if(closeItemCheck()){} else if(combineFrom>=0) {combineFrom=-1;message="Combine cancelled";} else if(state.paused){resumeGameplay();} else running=true; }
-                if(key==KeyEvent.KEYCODE_BUTTON_X&&state.paused&&!worldMessage)beginCombine();
-                if(key==KeyEvent.KEYCODE_BUTTON_Y&&state.paused&&!worldMessage)checkItem();
+                if (back) { if(closeItemCheck()){} else if(combineFrom>=0) {state.selected=combineFrom;combineFrom=-1;message="Combine cancelled";itemActions.open(NativeInventory.snapshot(),state.selected);menuSound(6);} else if(state.paused){resumeGameplay();} else running=true; }
+
                 if(action) {
                     if(closeItemCheck()){}
                     else if(worldMessage){resumeGameplay();}
-                    else if(state.paused){if(combineFrom>=0)selectSlot(state.selected);else equip();}
+                    else if(state.paused){if(combineFrom>=0)selectSlot(state.selected);else openItemActions();}
                     else interact();
                 }
             }
@@ -356,11 +446,27 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         refresh(); return true;
     }
 
+    private void requestQuit(){
+        if(activeDoor!=null||quitPrompt)return;
+        menuSound(5);quitWasPaused=state.paused;quitPrompt=true;quitYes=false;state.paused=true;
+        state.releaseInput();running=false;hatX=hatY=0;refresh();
+    }
+    private void answerQuit(boolean yes){
+        if(!quitPrompt)return;
+        if(yes){dismissSecondary();finishAndRemoveTask();return;}
+        menuSound(6);quitPrompt=false;quitYes=false;state.paused=quitWasPaused;state.releaseInput();running=false;hatX=hatY=0;
+        getWindow().getDecorView().setFocusableInTouchMode(true);getWindow().getDecorView().requestFocus();refresh();
+    }
+    @Override public void onBackPressed(){if(quitPrompt)answerQuit(false);else requestQuit();}
+
     private void closeMessage(){NativeWorld.closeMessage();worldMessage=false;message="Select an item to manage inventory";}
-    private boolean closeItemCheck(){boolean closed=false;for(ProbePanel p:panels)if(p.inventoryView!=null)closed|=p.inventoryView.closeCheck();return closed;}
+    private boolean itemChecking(){for(ProbePanel p:panels)if(p.inventoryView!=null&&p.inventoryView.isChecking())return true;return false;}
+    private boolean closeItemCheck(){boolean closed=false;for(ProbePanel p:panels)if(p.inventoryView!=null)closed|=p.inventoryView.closeCheck();if(closed)menuSound(6);return closed;}
     private void resumeGameplay(){
-        if(activeDoor!=null)return;
-        pauseMenu=false;
+        if(state.paused)menuSound(6);
+        if(combat!=null&&combat.dead){openPauseMenu();return;}
+        if(activeDoor!=null||quitPrompt)return;
+        pauseMenu=false;itemActions.close();
         if(pickupItem>0){NativeWorld.confirm(false);pickupItem=0;}
         closeItemCheck();closeMessage();state.paused=false;combineFrom=-1;running=false;state.releaseInput();hatX=hatY=0;
         // The activity remains the controller input owner after lower-screen touches.
@@ -369,6 +475,7 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         refresh();
     }
     private String[] pauseEntries(){
+        if(combat!=null&&combat.dead)return new String[]{"Restart exploration","Quit game"};
         if(pausePage==1)return ROOM_ITEMS;
         if(pausePage==2){
             int start=roomPage*8,count=Math.min(8,rooms.keys.length-start);
@@ -379,11 +486,14 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         String[] items=PAUSE_ITEMS.clone();items[7]="Door animations: "+(doorAnimations?"On":"Off");return items;
     }
     private void openPauseMenu(){
-        if(activeDoor!=null||pickupItem>0||worldMessage)return;
-        pauseMenu=true;pausePage=0;pauseSelection=0;state.paused=true;combineFrom=-1;running=false;state.releaseInput();hatX=hatY=0;refresh();
+        if(activeDoor!=null||quitPrompt||pickupItem>0||worldMessage)return;
+        if(combat!=null&&combat.dead)message="You died. Choose restart or quit.";
+        itemActions.close();closeItemCheck();menuSound(5);pauseMenu=true;pausePage=0;pauseSelection=0;state.paused=true;combineFrom=-1;running=false;state.releaseInput();hatX=hatY=0;refresh();
     }
     private void togglePause(){if(state.paused)resumeGameplay();else openPauseMenu();}
     private void pauseAction(int choice){
+        if(combat!=null&&combat.dead){if(choice==0){pauseMenu=false;resetGame();}else requestQuit();return;}
+        if(quitPrompt)return;
         if(pausePage==2){
             int count=Math.min(8,rooms.keys.length-roomPage*8);
             if(choice<count){int key=rooms.keys[roomPage*8+choice];exploreRoom(key/256,key%256);return;}
@@ -403,23 +513,28 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         }
         switch(choice){
             case 0:resumeGameplay();break;
-            case 1:pauseMenu=false;state.paused=true;message="Select an item to manage inventory";refresh();break;
+            case 1:menuSound(5);pauseMenu=false;state.paused=true;message="Select an item to manage inventory";refresh();break;
             case 2:resumeGameplay();interact();break;
-            case 3:pausePage=1;pauseSelection=0;refresh();break;
+            case 3:if(story!=null&&story.locked){message="Finish the scene before changing rooms";refresh();break;}pausePage=1;pauseSelection=0;refresh();break;
             case 4:state.swapped=!state.swapped;rebuild();break;
             case 5:pauseMenu=false;NativeInventory.reset(true);worldMessage=false;NativeWorld.closeMessage();message="Test supplies added";refresh();break;
             case 6:pauseMenu=false;resetGame();break;
             case 7:pauseSelection=7;doorAnimations=!doorAnimations;getSharedPreferences("settings",MODE_PRIVATE).edit().putBoolean("doorAnimations",doorAnimations).apply();refresh();break;
+            case 8:requestQuit();break;
             default:break;
         }
     }
     private void beginCombine(){
-        if(activeDoor!=null)return;pauseMenu=false;state.paused=true;combineFrom=state.selected;message="Select the second item to combine";refresh();}
+        if(activeDoor!=null||quitPrompt)return;pauseMenu=false;state.paused=true;itemActions.close();menuSound(5);combineFrom=state.selected;message="Select the second item to combine";refresh();}
     private void checkItem(){
-        if(activeDoor!=null)return;pauseMenu=false;state.paused=true;for(ProbePanel p:panels)if(p.inventoryView!=null)p.inventoryView.check();refresh();}
+        if(activeDoor!=null||quitPrompt)return;pauseMenu=false;state.paused=true;menuSound(5);for(ProbePanel p:panels)if(p.inventoryView!=null)p.inventoryView.check();refresh();}
     private void updateActionHint(){
+        if(story!=null&&story.locked){actionHint="Story sequence · Start: pause";return;}
+        if(combat!=null&&combat.dead){actionHint="You died";return;}
+        if(combat!=null&&combat.grabbed){actionHint="Tap A repeatedly to break free";return;}
+        if(state.aiming()){actionHint="A: fire / stab · Empty handgun: press A again to reload";return;}
         int i=RoomInteraction.nearest(triggers,session.x,session.z,session.direction,session.floor());
-        actionHint=i<0?"A: interact with nearby doors and items":triggers[i+1]==1?"A: open door":triggers[i+1]==2?"A: pick up "+room.menu.name(triggers[i+12]):"A: examine";
+        actionHint=i<0?"R1 / RT: aim · A: interact":triggers[i+1]==1?"A: open door":triggers[i+1]==2?"A: pick up "+room.menu.name(triggers[i+12]):"A: examine";
     }
     private void enterRoom(int id,float x,float z,float direction,int camera){enterRoom(1,id,x,0,z,direction,camera);}
     private void exploreRoom(int stage,int id){
@@ -434,14 +549,33 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         catch(Exception ex){roomLoadFailed(ex);}
     }
     private void enterLoadedRoom(RoomData next,float x,float y,float z,float direction,int camera){
+        story=null;storyVoice.stop();
+        try{effectData=effectData.forRoom(next.stage,next.roomId);}catch(java.io.IOException ex){throw new IllegalStateException("Room effects load failed",ex);}
+        actorAssets.clear();worldActors=RoomActors.EMPTY;worldEffects=new int[0];
+        roomCheckpoint=checkpoint(next.stage,next.roomId,x,y,z,direction,camera);
         if(!NativeWorld.enter(next.raw,next.stage,next.roomId))throw new IllegalStateException("Room script load failed");
-        pauseMenu=false;room=next;session=new RoomSession(room);session.x=x;session.y=y;session.z=z;session.direction=direction;session.camera=Math.max(0,Math.min(camera,room.cameras.length-1));
+        try{combatAudio.room(NativeEffects.enemyBank(),1000+(next.stage-1)*256+next.roomId);}catch(java.io.IOException ex){throw new IllegalStateException("Combat sound load failed",ex);}
+        combat=new CombatState(NativeCombat.snapshot());
+        itemActions.close();pauseMenu=false;room=next;session=new RoomSession(room);session.x=x;session.y=y;session.z=z;session.direction=direction;session.camera=Math.max(0,Math.min(camera,room.cameras.length-1));
         state.releaseInput();running=false;scriptTime=0;combineFrom=-1;worldMessage=false;pickupItem=0;worldObjects=NativeWorld.objects();state.paused=false;
         triggers=NativeWorld.triggers();message=String.format(Locale.US,"Entered room %d%02X",room.stage,room.roomId);rebuild();
     }
-    private void resetGame(){NativeWorld.reset();NativeInventory.reset(false);enterRoom(0,19800,300,16384,0);}
+    private boolean actorError;
+    private void updateActors(){
+        if(actorError)return;
+        try {worldActors=actorAssets.decode(NativeWorld.actors());}
+        catch(java.io.IOException|IllegalArgumentException ex){
+            actorError=true;state.paused=true;worldActors=RoomActors.EMPTY;
+            Log.e("Re2Thor","Actor assets failed",ex);
+            new AlertDialog.Builder(this).setTitle("Actor could not load").setMessage(ex.toString())
+                .setPositiveButton("Close",(d,w)->finishAndRemoveTask()).show();
+        }
+    }
+    private void resetGame(){state.health.reset();NativeWorld.reset();NativeInventory.reset(false);enterRoom(0,19800,300,16384,0);}
     private void interact(){
-        if(activeDoor!=null)return;
+        if(story!=null&&story.locked)return;
+        if(combat!=null&&(combat.grabbed||combat.dead))return;
+        if(activeDoor!=null||quitPrompt)return;
         if(pickupItem>0){answerPickup(pickupYes);return;}
         int i=RoomInteraction.nearest(triggers,session.x,session.z,session.direction,session.floor());
         if(i<0){message="Move closer to a door or item and face it";return;}
@@ -468,23 +602,51 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         else {resumeGameplay();if(result[0]==1)message="You took the "+room.menu.name(result[1])+".";}
         refresh();
     }
+    private void menuSound(int note){if(combatAudio!=null&&resumed&&screensOn()){combatAudio.setMenuEnabled(true);combatAudio.menu(note);}}
     private void selectSlot(int slot) {
-        if(activeDoor!=null)return;
+        if(activeDoor!=null||quitPrompt)return;
         pauseMenu=false;
         if(worldMessage){resumeGameplay();return;}
-        closeItemCheck();state.select(slot);
+        closeItemCheck();state.select(slot);state.releaseInput();itemActions.close();
         if(combineFrom>=0) {
             int result=NativeInventory.combine(combineFrom,slot);combineFrom=-1;
+            menuSound(result==1?8:result==2?5:7);
             message=result==1?"Ammunition loaded":result==2?"Herbs combined":result==-1?"Weapon is already full":"These items cannot be combined";
-        } else message=room.menu.name(NativeInventory.snapshot()[slot*2]);
+        } else {message=room.menu.name(NativeInventory.snapshot()[slot*2]);openItemActions();}
         refresh();
     }
+    private void openItemActions(){
+        if(worldMessage||pickupItem>0||quitPrompt||activeDoor!=null)return;
+        pauseMenu=false;state.paused=true;state.releaseInput();hatX=hatY=0;
+        menuSound(itemActions.open(NativeInventory.snapshot(),state.selected)?5:7);refresh();
+    }
+    private void itemCommand(int command){
+        if(!itemActions.open||itemChecking())return;
+        if(command==InventoryActions.CHECK){checkItem();return;}
+        itemActions.close();
+        if(command==InventoryActions.COMBINE){beginCombine();return;}
+        if(command==InventoryActions.PRIMARY){
+            int item=NativeInventory.snapshot()[state.selected*2];
+            if(InventoryActions.weapon(item))equip();
+            else {
+                int result=NativeWorld.useItem(state.selected,(int)session.x,(int)session.y,(int)session.z,(int)session.direction,session.camera);
+                combat=new CombatState(NativeCombat.snapshot());state.health.restore(combat.hp);
+                menuSound(result>0?5:7);
+                message=result==1?"Health restored.":result==2?"You unlocked the door.":result==-1?"You are already in Fine condition at full health.":"You can't use this here.";
+                refresh();
+            }
+        }
+    }
+    private void inventoryBack(){if(!closeItemCheck()){itemActions.close();menuSound(6);}refresh();}
     private void equip() {
-        if(activeDoor!=null)return;
+        if(story!=null&&story.locked){message="Equipment is unavailable during this scene";refresh();return;}
+        if(combat!=null&&(combat.grabbed||combat.dead)){message="Cannot change equipment while grabbed";refresh();return;}
+        if(activeDoor!=null||quitPrompt)return;
         pauseMenu=false;
         if(worldMessage){resumeGameplay();return;}
         state.paused=true;
-        message=NativeInventory.equip(state.selected)!=0?"Equipment updated":"Select a weapon to equip";
+        boolean ok=NativeInventory.equip(state.selected)!=0;menuSound(ok?5:7);
+        message=ok?(NativeInventory.snapshot()[16]==state.selected?"Weapon equipped":"Weapon unequipped"):"Select a weapon to equip";
         combineFrom=-1;refresh();
     }
     private float axis(MotionEvent event, int axis) {
@@ -497,13 +659,21 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
     private boolean joystick(MotionEvent event) {
         if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.getAction() != MotionEvent.ACTION_MOVE) return false;
         if(activeDoor!=null){state.releaseInput();return true;}
+        if(!state.paused)state.aimTrigger=event.getAxisValue(MotionEvent.AXIS_RTRIGGER)>.5f||event.getAxisValue(MotionEvent.AXIS_GAS)>.5f;
         state.axisX = axis(event, MotionEvent.AXIS_X); state.axisY = axis(event, MotionEvent.AXIS_Y);
         int hx = Math.round(event.getAxisValue(MotionEvent.AXIS_HAT_X));
         int hy = Math.round(event.getAxisValue(MotionEvent.AXIS_HAT_Y));
+        if(quitPrompt){int nav=hx!=0?hx:state.axisX>.5f?1:state.axisX<-.5f?-1:0;if(nav!=0&&nav!=hatX)quitYes=nav<0;hatX=nav;state.releaseInput();refresh();return true;}
         if(pauseMenu){int nav=hy!=0?hy:state.axisY>.5f?1:state.axisY<-.5f?-1:0;if(nav!=0&&nav!=hatY)pauseSelection=Math.floorMod(pauseSelection+nav,pauseEntries().length);hatY=nav;state.releaseInput();refresh();return true;}
         if(pickupItem>0){int nav=hx!=0?hx:state.axisX>.5f?1:state.axisX<-.5f?-1:0;if(nav!=0&&nav!=hatX)pickupYes=nav<0;hatX=nav;state.releaseInput();refresh();return true;}
-        if (state.paused && (hx != hatX || hy != hatY))
-            state.selected = Math.floorMod(state.selected + hx + hy * 2, 8);
+        if(state.paused&&itemActions.open){
+            int nav=hy!=0?hy:state.axisY>.5f?1:state.axisY<-.5f?-1:0;
+            if(!itemChecking()&&nav!=0&&nav!=hatY){itemActions.move(nav);menuSound(4);}
+            hatY=nav;state.releaseInput();refresh();return true;
+        }
+        if (state.paused && (hx != 0 || hy != 0) && (hx != hatX || hy != hatY)) {
+            state.selected = Math.floorMod(state.selected + hx + hy * 2, 8);menuSound(4);
+        }
         if (state.axisX == 0) state.axisX = hx;
         if (state.axisY == 0) state.axisY = hy;
         hatX = hx; hatY = hy;
@@ -539,10 +709,14 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
             if(inventory){
                 inventoryView=new InventoryView(c,room.menu,new InventoryView.Actions(){
                     public void select(int slot){selectSlot(slot);}
+                    public void command(int index){itemCommand(index);}
+                    public void back(){inventoryBack();}
                     public void equip(){MainActivity.this.equip();}
                     public void combine(){if(worldMessage)resumeGameplay();else beginCombine();}
                     public void check(){if(worldMessage)resumeGameplay();else checkItem();}
-                    public void exit(){resumeGameplay();}
+                    public void exit(){requestQuit();}
+                    public void resume(){resumeGameplay();}
+                    public void quit(boolean yes){answerQuit(yes);}
                     public void answer(boolean yes){answerPickup(yes);}
                 });
                 addView(inventoryView,new LayoutParams(-1,-1));
@@ -556,8 +730,8 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
             panels.add(this);
         }
         void refresh(){
-            if(inventoryView!=null){inventoryView.pickup(pickupItem,pickupYes);inventoryView.update(NativeInventory.snapshot(),state.selected,combineFrom,state.paused,worldMessage,state.paused?message:actionHint);}
-            if(menu!=null){menu.update(pauseEntries(),pauseSelection);menu.setVisibility(pauseMenu?View.VISIBLE:View.GONE);}
+            if(inventoryView!=null){inventoryView.commands(itemActions.open,itemActions.selected);inventoryView.status(state.health.hp(),quitPrompt,quitYes);inventoryView.pickup(pickupItem,pickupYes);inventoryView.update(NativeInventory.snapshot(),state.selected,combineFrom,state.paused,worldMessage,state.paused?message:actionHint);}
+            if(menu!=null){menu.update(pauseEntries(),pauseSelection,combat!=null&&combat.dead);menu.setVisibility(pauseMenu?View.VISIBLE:View.GONE);}
             if(scene!=null)scene.update();
         }
     }
@@ -566,10 +740,10 @@ public final class MainActivity extends Activity implements DisplayManager.Displ
         final RoomRenderer renderer;
         Scene(Context c) {
             super(c);setEGLContextClientVersion(2);setEGLConfigChooser(8,8,8,8,24,0);
-            renderer=new RoomRenderer(room,session.pose());setRenderer(renderer);setRenderMode(RENDERMODE_WHEN_DIRTY);
+            renderer=new RoomRenderer(room,session.pose());renderer.effectData=effectData;setRenderer(renderer);setRenderMode(RENDERMODE_WHEN_DIRTY);
             setContentDescription("Resident Evil 2 gameplay. Tap to pause.");
         }
-        void update(){renderer.pose=session.pose();renderer.objects=worldObjects;
+        void update(){renderer.pose=session.pose();renderer.objects=worldObjects;renderer.actors=worldActors;renderer.effects=worldEffects;
             renderer.doorFrame=activeDoor==null?0:Math.min(activeDoor.frames-1,(int)(doorTime*activeDoor.fps));
             renderer.door=activeDoor;requestRender();}
     }

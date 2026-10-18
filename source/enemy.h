@@ -9,7 +9,11 @@
 
 #include "assets.h"
 
+#ifdef RE2_HEADLESS
+#define MAX_ENEMIES 32 // original script slots; Android is not limited by DS geometry memory
+#else
 #define MAX_ENEMIES 8
+#endif
 
 void enemy_room_reset(void);   // frees all enemy models (room change)
 // the room's path zones (tools/blk2ds.py, kept by the caller), NULL if none
@@ -56,3 +60,6 @@ extern int enemy_jumps, enemy_jump_max, enemy_toggles;
 
 void model_gx_cost(const Model *m, int *vertices, int *polygons);
 void enemy_debug_print(int tick);   // host tests only
+
+#define ENEMY_POSE_SIZE 108
+int enemy_poses(int *out); // MAX_ENEMIES records, each ENEMY_POSE_SIZE ints

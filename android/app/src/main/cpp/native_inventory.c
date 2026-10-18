@@ -80,3 +80,53 @@ JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeWorld_objects(JNIEnv *e,jc
 JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeWorld_confirm(JNIEnv *e,jclass c,jboolean yes){
  (void)c;jint data[8]={0};data[0]=world_confirm(yes,data+1);jintArray a=(*e)->NewIntArray(e,8);if(a)(*e)->SetIntArrayRegion(e,a,0,8,data);return a;
 }
+
+#include "enemy.h"
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeWorld_actors(JNIEnv *e,jclass c){
+    (void)c;int data[MAX_ENEMIES*ENEMY_POSE_SIZE];int size=world_actors(data)*ENEMY_POSE_SIZE;
+    jintArray a=(*e)->NewIntArray(e,size);if(a)(*e)->SetIntArrayRegion(e,a,0,size,data);return a;
+}
+
+#include "combat.h"
+JNIEXPORT void JNICALL Java_org_re2ds_thor_NativeCombat_input(JNIEnv *e,jclass c,jboolean aim,jboolean fire,jboolean pressed,jint turn,jint posture,jint noise){
+ (void)e;(void)c;combat_input(aim,fire,pressed,turn,posture,noise);
+}
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeCombat_snapshot(JNIEnv *e,jclass c){
+ (void)c;int data[COMBAT_STATE_SIZE];combat_state(data);jintArray a=(*e)->NewIntArray(e,COMBAT_STATE_SIZE);
+ if(a)(*e)->SetIntArrayRegion(e,a,0,COMBAT_STATE_SIZE,data);return a;
+}
+JNIEXPORT void JNICALL Java_org_re2ds_thor_NativeCombat_restore(JNIEnv *e,jclass c,jint hp){(void)e;(void)c;combat_reset(hp);}
+JNIEXPORT jboolean JNICALL Java_org_re2ds_thor_NativeCombat_blocked(JNIEnv *e,jclass c,jint ox,jint oz,jint x,jint z){
+ (void)e;(void)c;return enemy_blocks_player(ox,oz,x,z)?JNI_TRUE:JNI_FALSE;
+}
+
+#include "effect_snapshot.h"
+#include "combat_audio.h"
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeEffects_snapshot(JNIEnv *e,jclass c){
+ (void)c;int data[FX_MAX_QUADS*FX_RECORD_SIZE];int n=effect_snapshot(data,FX_MAX_QUADS);
+ n+=roomfx_snapshot(data+n*FX_RECORD_SIZE,FX_MAX_QUADS-n);
+ jintArray a=(*e)->NewIntArray(e,n*FX_RECORD_SIZE);if(a)(*e)->SetIntArrayRegion(e,a,0,n*FX_RECORD_SIZE,data);return a;
+}
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeEffects_sounds(JNIEnv *e,jclass c){
+ (void)c;int data[COMBAT_AUDIO_MAX*4];int n=combat_audio_drain(data);
+ jintArray a=(*e)->NewIntArray(e,n*4);if(a)(*e)->SetIntArrayRegion(e,a,0,n*4,data);return a;
+}
+JNIEXPORT jint JNICALL Java_org_re2ds_thor_NativeEffects_enemyBank(JNIEnv *e,jclass c){(void)e;(void)c;return combat_audio_enemy_bank();}
+
+#include "story.h"
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeWorld_story(JNIEnv *e,jclass c){
+ (void)c;int data[STORY_STATE_SIZE];story_state(data);jintArray a=(*e)->NewIntArray(e,STORY_STATE_SIZE);
+ if(a)(*e)->SetIntArrayRegion(e,a,0,STORY_STATE_SIZE,data);return a;
+}
+JNIEXPORT jint JNICALL Java_org_re2ds_thor_NativeWorld_voice(JNIEnv *e,jclass c){(void)e;(void)c;return story_voice_event();}
+
+JNIEXPORT void JNICALL Java_org_re2ds_thor_NativeWorld_footstep(JNIEnv *e,jclass c,jint x,jint y,jint z,jboolean run){(void)e;(void)c;world_footstep(x,y,z,run);}
+
+JNIEXPORT jint JNICALL Java_org_re2ds_thor_NativeWorld_useItem(JNIEnv *e,jclass c,jint slot,jint x,jint y,jint z,jint direction,jint camera){
+    (void)e;(void)c;world_player(x,y,z,direction,camera);return world_use_item(slot);
+}
+
+JNIEXPORT jintArray JNICALL Java_org_re2ds_thor_NativeWorld_cameraZones(JNIEnv *e,jclass c){
+    (void)c;int data[256],n=world_camera_zones(data);jintArray a=(*e)->NewIntArray(e,n);
+    if(a)(*e)->SetIntArrayRegion(e,a,0,n,data);return a;
+}

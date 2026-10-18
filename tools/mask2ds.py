@@ -83,7 +83,10 @@ def main():
         for m in cam["masks"]:
             x0, y0 = m["dest"]
             x1, y1 = x0 + m["w"], y0 + m["h"]
-            dist = m["depth"] * 32
+            # PS1 order-table depth zero is a foreground sprite, not a
+            # degenerate quad at the camera. Keep its screen rectangle and
+            # place it just beyond the GLES/DS near plane (204.8 world units).
+            dist = max(256, m["depth"] * 32)
             corners = [unproject(basis, x, y, dist) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
             quads += struct.pack("<BBHHH12i", m["src"][0], m["src"][1], m["w"], m["h"], m["depth"],
                                  *[c for p in corners for c in p])

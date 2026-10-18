@@ -6,7 +6,7 @@ void world_reset(void);
 void world_tick(void);
 void world_player(int x,int y,int z,int direction,int camera);
 int world_boxes(int *out);
-int world_trigger(int slot,int *result); // 2 door, 3 message, 4 unsupported, 5 confirmation
+int world_trigger(int slot,int *result); // 2 door, 3 message, 4 unsupported, 5 confirmation, 6 story event
 int world_confirm(int yes,int *result); // 1 collected, 3 full inventory, 0 cancelled/stale
 int world_objects(int *out); // up to 32 records: model,type,flags,x,y,z,rx,ry,rz
 int world_triggers(int *out); // 32 records, 14 ints: slot,type,sat,floor,quad x/z,item,destination
@@ -14,3 +14,9 @@ const char *world_message(void);
 void world_close_message(void);
 int world_save(uint8_t *out);
 int world_restore(const uint8_t *in,size_t size);
+int world_actors(int *out); // MAX_ENEMIES records of ENEMY_POSE_SIZE ints
+
+void world_footstep(int x,int y,int z,int run);
+// Use: 1 healed, 2 unlocked, -1 full health, 0 unavailable/no matching target.
+int world_use_item(int slot);
+int world_camera_zones(int *out); // current view/disabled roles in original RVD order

@@ -108,6 +108,7 @@ typedef struct {
 // Camera switch zone on the floor (x/z quad). See world/cameraswitch.go in
 // OpenBiohazard2: per camera, the first zone with cam1 == 0 is that camera's
 // own view area and never switches.
+#define SWITCH_DISABLED 0x02 // original RVD enable byte was zero
 #define SWITCH_VIEW_AREA 0x01  // role bit: this zone is cam0's view area
 typedef struct {
     uint8_t cam0;          // active camera

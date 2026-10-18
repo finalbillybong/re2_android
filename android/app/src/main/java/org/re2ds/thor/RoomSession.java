@@ -4,12 +4,17 @@ package org.re2ds.thor;
 final class RoomSession {
     final RoomData data;
     float x=19800, y, z=300, direction=16384, accumulator;
+    short[] combatFrame;
     int slope=-1;
+    int footstep; // 0 none, 1 walk/turn/back, 2 run; consumed each simulation tick
     float slopeBase;
+    boolean autoCamera=true;
+    final int[] cameraMap=new int[32];
     int camera, animation=12, key, weapon=2;
-    RoomSession(RoomData d) { data=d; }
+    RoomSession(RoomData d) { data=d;for(int i=0;i<32;i++)cameraMap[i]=i; }
     void reset() { x=19800;z=300;direction=16384;y=0;slope=-1;camera=0;animation=12;key=0;accumulator=0; }
     void step(float seconds,float turn,float forward,boolean run,boolean paused,int equipped) {
+        footstep=0;
         int w=equipped==1?1:equipped==2?2:0;
         if(w!=weapon) { weapon=w;key=0; }
         if(paused) { accumulator=0;return; }
@@ -24,6 +29,7 @@ final class RoomSession {
             RoomData.Model m=data.models[weapon];int[] sequence=m.animations[animation];
             int prev=key;boolean back=forward>0;
             key=Math.floorMod(key+(back?-1:1),sequence.length);
+            if(a!=12&&m.animationFlags!=null&&(m.animationFlags[a][key]&0x4000)!=0)footstep=a==11?2:1;
             if(moving) {
                 int k0=back?key:prev,k1=back?prev:key;
                 int s0=k1==0?0:m.frames[sequence[k0]][3],s1=m.frames[sequence[k1]][3];
@@ -75,20 +81,23 @@ final class RoomSession {
         for(int i=0;i<4;i++) {int j=(i+1)%4;float c=(q.x[j]-q.x[i])*(z-q.z[i])-(q.z[j]-q.z[i])*(x-q.x[i]);positive|=c>0;negative|=c<0;}
         return !(positive&&negative);
     }
+    int mapped(int c){return c>=0&&c<32?cameraMap[c]:c;}
     void switchCamera() {
-        for(RoomData.Zone q:data.zones) if((q.role&1)==0&&q.from==camera&&(q.floor==255||q.floor==floor())&&inside(q,x,z)) {
-            if(q.to<data.cameras.length)camera=q.to;return;
+        if(!autoCamera)return;
+        for(RoomData.Zone q:data.zones) if((q.role&3)==0&&mapped(q.from)==camera&&(q.floor==255||q.floor==floor())&&inside(q,x,z)) {
+            if(mapped(q.to)<data.cameras.length)camera=mapped(q.to);return;
         }
         boolean inView=false;int other=-1;
-        for(RoomData.Zone q:data.zones) if((q.role&1)!=0&&(q.floor==255||q.floor==floor())&&inside(q,x,z)) {
-            if(q.from==camera)inView=true;
-            else if(other<0)for(RoomData.Zone t:data.zones)if((t.role&1)==0&&t.from!=t.to&&(t.from==q.from||t.to==q.from)){other=q.from;break;}
+        for(RoomData.Zone q:data.zones) if((q.role&3)==1&&(q.floor==255||q.floor==floor())&&inside(q,x,z)) {
+            if(mapped(q.from)==camera)inView=true;
+            else if(other<0)for(RoomData.Zone t:data.zones)if((t.role&3)==0&&t.from!=t.to&&(t.from==q.from||t.to==q.from)){other=mapped(q.from);break;}
         }
         if(!inView&&other>=0&&other<data.cameras.length)camera=other;
     }
-    Pose pose() {return new Pose(x,y,z,direction,camera,weapon,animation,key);}
+    Pose pose() {return new Pose(x,y,z,direction,camera,weapon,animation,key,combatFrame);}
     static final class Pose {
+        final short[] frame;
         final float x,y,z,direction;final int camera,weapon,animation,key;
-        Pose(float x,float y,float z,float d,int c,int w,int a,int k){this.x=x;this.y=y;this.z=z;direction=d;camera=c;weapon=w;animation=a;key=k;}
+        Pose(float x,float y,float z,float d,int c,int w,int a,int k,short[] frame){this.frame=frame;this.x=x;this.y=y;this.z=z;direction=d;camera=c;weapon=w;animation=a;key=k;}
     }
 }

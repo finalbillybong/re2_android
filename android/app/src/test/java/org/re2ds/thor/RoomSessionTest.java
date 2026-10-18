@@ -23,6 +23,15 @@ public class RoomSessionTest {
             }
         }
     }
+    @Test public void disabledBusCameraZonesCannotSwitchUntilEnabled()throws Exception {
+        RoomData d=new RoomData(p->{try(FileInputStream in=new FileInputStream("../../build/android-assets/re2/"+p)){return in.readAllBytes();}},0x19);
+        assertEquals(2,d.zones[8].role&2); // authored alternate switch starts disabled
+        for(RoomData.Zone z:d.zones)z.role|=2;
+        RoomData.Zone target=d.zones[6];RoomSession s=new RoomSession(d);s.camera=2;
+        s.x=(target.x[0]+target.x[2])/2f;s.z=(target.z[0]+target.z[2])/2f;s.y=0;
+        s.switchCamera();assertEquals(2,s.camera);
+        target.role&=~2;s.switchCamera();assertEquals(target.to,s.camera);
+    }
     @Test public void realAssetsDecodeAndAllAnimationReferencesAreValid() {
         assertEquals(9,room.cameras.length);assertEquals("Hand Gun",room.menu.name(2));
         for(RoomData.Model m:room.models){assertEquals(15,m.bones);assertFalse(m.meshes.isEmpty());for(int[] sequence:m.animations)for(int f:sequence)assertTrue(f<m.frames.length);}
@@ -41,6 +50,20 @@ public class RoomSessionTest {
         assertTrue(s.x<19800);assertEquals(300,s.z,.1);
         float x=s.x;s.step(1f/30,1,0,false,false,2);
         assertTrue(s.direction>16384);assertEquals(x,s.x,0);
+    }
+    @Test public void footstepsFollowOriginalContactFramesAndStopWhenPausedOrIdle() {
+        for(int weapon:new int[]{0,1,2})for(int mode=0;mode<4;mode++){
+            RoomSession s=new RoomSession(room);int contacts=0;
+            float turn=mode==3?1:0,forward=mode==3?0:mode==2?1:-1;boolean run=mode==1;
+            for(int tick=0;tick<90;tick++){
+                s.step(1f/30,turn,forward,run,false,weapon);
+                int expected=(room.models[weapon].animationFlags[s.animation][s.key]&0x4000)!=0?(run?2:1):0;
+                assertEquals(expected,s.footstep);if(s.footstep!=0)contacts++;
+            }
+            assertTrue(contacts>0);
+            s.step(1f/30,turn,forward,run,true,weapon);assertEquals(0,s.footstep);
+            for(int tick=0;tick<60;tick++){s.step(1f/30,0,0,false,false,weapon);assertEquals(0,s.footstep);}
+        }
     }
     @Test public void obstaclesPermitEscapeButBlockDeeperEntry() {
         RoomData.Box b=new RoomData.Box();b.x=0;b.z=0;b.w=1000;b.d=1000;

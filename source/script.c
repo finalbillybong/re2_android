@@ -1,5 +1,6 @@
 // re2ds - interpreter for the RE2 room scripts (see script.h).
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #include "script.h"
@@ -38,14 +39,14 @@ enum {
     OP_IF = 6, OP_ELSE = 7, OP_ENDIF = 8, OP_SLEEP = 9, OP_WSLEEP = 11, OP_WSLEEPING = 12,
     OP_FOR = 13, OP_NEXT = 14, OP_WHILE = 15, OP_EWHILE = 16, OP_DO = 17, OP_EDWHILE = 18,
     OP_SWITCH = 19, OP_CASE = 20, OP_DEFAULT = 21, OP_ESWITCH = 22, OP_GOTO = 23, OP_GOSUB = 24,
-    OP_RETURN = 25, OP_BREAK = 26, OP_CK = 33, OP_SET = 34, OP_CMP = 35, OP_SAVE = 36,
+    OP_RETURN = 25, OP_BREAK = 26, OP_WORK_COPY = 29, OP_CK = 33, OP_SET = 34, OP_CMP = 35, OP_SAVE = 36,
     OP_COPY = 37, OP_CALC = 38, OP_CALC2 = 39, OP_CUT_CHG = 41, OP_CUT_OLD = 42,
     OP_MESSAGE_ON = 43, OP_AOT_SET = 44, OP_OBJ_MODEL_SET = 45, OP_FLR_SET = 56, OP_SCE_ESPR_ON = 58, OP_SCE_ESPR_KILL = 76, OP_WORK_SET = 46, OP_SPEED_SET = 47, OP_ADD_SPEED = 48, OP_ADD_ASPEED = 49, OP_POS_SET = 50, OP_DIR_SET = 51,
     OP_MEMBER_SET = 52, OP_MEMBER_SET2 = 53, OP_SE_ON = 54, OP_SCA_ID_SET = 55, OP_DIR_CK = 57, OP_SCE_EM_SET = 68, OP_DOOR_AOT_SET = 59, OP_CUT_AUTO = 60, OP_MEMBER_COPY = 61, OP_MEMBER_CMP = 62,
     OP_AOT_RESET = 70, OP_AOT_ON = 71, OP_CUT_REPLACE = 75, OP_ITEM_AOT_SET = 78,
     OP_SCE_TRG_CK = 80, OP_SCE_BGM_CONTROL = 81, OP_KEEP_ITEM_CK = 94, OP_AOT_SET_4P = 103, OP_DOOR_AOT_SET_4P = 104,
     OP_ITEM_AOT_SET_4P = 105, OP_PLC_MOTION = 63, OP_PLC_DEST = 64, OP_PLC_RET = 66, OP_PLC_ROT = 88,
-    OP_PLC_CNT = 91, OP_PLC_STOP = 102, OP_XA_ON = 89, OP_MOVIE_ON = 111, OP_SCE_BGMTBL_SET = 87,
+    OP_CUT_BE_SET = 97, OP_PLC_CNT = 91, OP_PLC_STOP = 102, OP_XA_ON = 89, OP_MOVIE_ON = 111, OP_SCE_BGMTBL_SET = 87,
 };
 
 enum { B_IF, B_FOR, B_WHILE, B_DO, B_DOCOND, B_SWITCH };
@@ -76,6 +77,7 @@ typedef struct {
     } calls[MAX_CALLS];
 } Thread;
 
+static Thread frame_thread;
 Aot aots[NUM_AOTS];
 int script_threads_running;
 int script_unknown_ops;
@@ -379,7 +381,7 @@ static void run_thread(Thread *t)
     }
     for (int budget = BUDGET; budget > 0 && t->active; budget--) {
         if (unwind(t))
-            return; // do loop iteration done
+            continue; // Loop back in this tick; EVT_NEXT/SLEEP performs the yield.
         if (t->code_size && t->pc >= t->code_size) { // ran off the block (room 10F's init
             t->active = 0;                          // jumps to its end): as evt_end
             return;
@@ -471,8 +473,7 @@ static void run_thread(Thread *t)
             break;
         case OP_EWHILE:
             if (t->nblocks > call_base(t) && t->blocks[t->nblocks - 1].type == B_WHILE) {
-                t->pc = t->blocks[--t->nblocks].start; // re-check the conditions next tick
-                return;
+                next = t->blocks[--t->nblocks].start; // re-check in this tick
             }
             break;
         case OP_DO:
@@ -532,6 +533,23 @@ static void run_thread(Thread *t)
             }
             break;
 
+        case OP_WORK_COPY: { // NTSC 0x80050b50: patch a later instruction operand.
+            size_t at=(size_t)next+ins[2],width=ins[3]?2:1;
+            if(at<=t->code_size&&width<=t->code_size-at){
+                uint16_t value=(uint16_t)*var(ins[1]);uint8_t *dst=(uint8_t *)t->code+at;
+                dst[0]=(uint8_t)value;if(width==2)dst[1]=(uint8_t)(value>>8);
+            }
+            break;
+        }
+        case OP_DIR_CK: {
+            int x,z,dir;
+            if(work_member(t,11,&x)&&work_member(t,13,&z)&&work_member(t,15,&dir)){
+                int angle=(int)(atan2((double)z-rd16(ins+4),(double)rd16(ins+2)-x)*2048.0/3.141592653589793);
+                int delta=((angle-dir+2048)&4095)-2048;
+                cond=abs(delta)<rd16(ins+6);
+            }else cond=0;
+            break;
+        }
         case OP_CK:
             cond = flag_get(ins[1], ins[2]) == ins[3];
             break;
@@ -565,7 +583,6 @@ static void run_thread(Thread *t)
                        compare((int16_t)value, ins[3], rd16(ins + 4));
             break;
         }
-        case OP_DIR_CK:
         case OP_SCE_TRG_CK:
             cond = 1; // needs object state the engine does not have yet
             break;
@@ -579,6 +596,18 @@ static void run_thread(Thread *t)
             break;
         case OP_CUT_AUTO:
             cam_auto = ins[1];
+            break;
+        case OP_CUT_BE_SET:
+            // NTSC 0x800512b0: first RVD record for camera, plus record index.
+            if(cur_room)for(int i=0;i<cur_room->header->num_switches;i++){
+                if(cur_room->switches[i].cam0!=ins[1])continue;
+                int index=i+ins[2];
+                if(index<cur_room->header->num_switches){
+                    RoomSwitch *s=(RoomSwitch *)&cur_room->switches[index];
+                    if(ins[3])s->role&=~SWITCH_DISABLED;else s->role|=SWITCH_DISABLED;
+                }
+                break;
+            }
             break;
         case OP_CUT_REPLACE:
             if (ins[1] < 32)
@@ -661,8 +690,14 @@ static void run_thread(Thread *t)
             break;
         case OP_SCE_EM_SET: // pad, slot, type, variant, status, floor, sound, model,
                             // set flag, x, y, z, dir, motion, ctr flag
-            game_spawn_enemy(ins[2], ins[3], ru16(ins + 4), ins[7], rd16(ins + 10), rd16(ins + 12),
+            game_spawn_enemy(ins[2], ins[3], ru16(ins + 4) | ((int)ins[8] << 16), ins[7], rd16(ins + 10), rd16(ins + 12),
                              rd16(ins + 14), rd16(ins + 16));
+            // Pre-animated people (e.g. Kendo's body on re-entry) carry their
+            // initial motion and controller flags in the SCE_EM_SET tail.
+            if(ins[3]>=0x40&&(ru16(ins+4)&0x100)){
+                const uint8_t motion[]={OP_PLC_MOTION,ins[19]==1?0:1,ins[18],ins[20]};
+                game_plc(3,ins[2],motion);
+            }
             break;
         case OP_SE_ON: // bank, s16 sound (low byte = number), position source, offset
             game_play_sound(ins[1], rd16(ins + 2) & 0xFF);
@@ -706,6 +741,18 @@ static void run_thread(Thread *t)
     }
 }
 
+// Main function 0 initializes the room; function 1 is its recurring check.
+// Keep a separate context so yielding checks cannot overwrite event threads.
+void script_frame(void){
+    if(!cur_room||!cur_room->exec_script||threads[0].active)return;
+    if(!frame_thread.active){
+        uint16_t pc=function_start(cur_room->exec_script,1);if(pc==0xffff)return;
+        memset(&frame_thread,0,sizeof frame_thread);frame_thread.active=1;
+        frame_thread.code=cur_room->exec_script;frame_thread.code_size=cur_room->header->size_exec;frame_thread.pc=pc;
+    }
+    run_thread(&frame_thread);
+}
+
 void script_tick(void)
 {
     script_threads_running = 0;
@@ -715,6 +762,10 @@ void script_tick(void)
             script_threads_running++;
         }
     }
+    // NTSC-U: the scheduler at 0x8005003c calls 0x8004f788 after all
+    // threads; 0x8004f7b0 clears flag-array 5's second word. PLC arrivals
+    // (bits 32..63) are one-tick signals, not persistent story flags.
+    memset(flags[5] + 4, 0, 4);
 }
 
 void script_camera_changed(int previous, int cam)
@@ -726,6 +777,8 @@ void script_camera_changed(int previous, int cam)
 void script_room_enter(const Room *room)
 {
     cur_room = room;
+    memset(&frame_thread,0,sizeof frame_thread);
+    memset(flags[5] + 4, 0, 4); // room initialization also clears transient arrivals
     memset(aots, 0, sizeof(aots));
     memset(threads, 0, sizeof(threads));
     for (int i = 0; i < 32; i++)

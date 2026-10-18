@@ -3,7 +3,7 @@
 // Each room has an init script (runs to completion on entry) and a main
 // script whose function 0 starts as thread 0; more threads are started with
 // EVT_EXEC or by event AOTs. Threads run once per game tick until they yield
-// (sleep, evt_next, end of a loop iteration, message) or end.
+// (sleep, evt_next, message) or end.
 //
 // Block semantics (checked against all rooms with tools/scd_disasm.py --check):
 //   if:    length from the end of the instruction; points past the else
@@ -77,6 +77,7 @@ void game_bgm_control(int id, int op, int type, int left, int right);
 void game_bgmtbl_set(int stage, int room, int main, int sub); // a room's music from now on
 // sce_em_set: enemy / character in slot `slot` (enemy.c)
 // voice: kind of voice (byte 7), picks the enemy sound set of the room
+// flags: original status/variant in low 16 bits; model selector in bits 16..23.
 void game_spawn_enemy(int slot, int type, int flags, int voice, int x, int y, int z, int dir_re2);
 // enemy object members for the room scripts (member_set / member_copy /
 // member_cmp after work_set 3): 0 if the member is not modelled
@@ -125,3 +126,5 @@ void script_state_reset(void);      // a new game
 // debug counters
 extern int script_threads_running;
 extern int script_unknown_ops;
+
+void script_frame(void); // recurring main-script function 1; Android route integration

@@ -2,7 +2,11 @@
 #include <math.h>
 #include <stdlib.h>
 
+#ifdef RE2_HEADLESS
+#include "portable_angles.h"
+#else
 #include <nds.h>
+#endif
 
 #include "plc.h"
 #include "script.h"

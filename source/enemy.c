@@ -1,5 +1,9 @@
 // re2ds - enemies (see enemy.h).
+#ifdef RE2_HEADLESS
+#include "portable_angles.h"
+#else
 #include <nds.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +27,7 @@
 #define ST_LUNGE 2              // arms up, faster at Leon (0x80101f0c / 0x80102218)
 #define ST_GRAB 3               // grabs and bites (0x8010259c / 0x801025a4)
 #define ST_LYING 7              // lies until EF_HOLD goes, then gets up (0x801036b4)
+#define ST_SHOVED 9             // knocked over by another zombie
 #define ST_EAT 8                // eats (variant 8, or Leon's body)
 #define ST_DOWN 5               // knocked down by shots, gets up again
 #define ST_DYING 20             // falls dead (death routine 0x80108470), then lies
@@ -136,6 +141,7 @@ typedef struct {
     uint8_t sees;               // line of sight to Leon (obj+0x154 bit 0x800)
     uint8_t sight_timer;        // the PS1 checks it every 8 frames
     uint8_t wander_idx, turn_timer, standing;
+    int16_t shove_dir;           // collision impulse direction, independent of facing
     int16_t timer, timer2;      // obj+0x158, obj+0x15a
     uint8_t voice, voice_ofs;   // voice kind (sce_em_set byte 7); + 16 for the second kind
     uint8_t moan_pause;
@@ -160,6 +166,7 @@ typedef struct {
     const Model *pose_set;
     int16_t pose_anim;
     uint8_t pose_blend, pose_valid;
+    uint8_t appearance;         // type 0x1f body texture variant (1..3)
     uint8_t no_blend;           // plc flag 0x40: the next animation starts without easing
 } Enemy;
 
@@ -204,9 +211,11 @@ int enemy_last_error;   // 0 ok, 1 model file, 2 model format, 3 no type slot, 4
 
 static void free_type(EnemyType *t)
 {
+#ifndef RE2_HEADLESS
     for (int p = 0; p < t->pages; p++)
         if (t->tex[p])
             glDeleteTextures(1, &t->tex[p]);
+#endif
     if (t->model.data)
         asset_free(t->model.data);
     free(t->tex_data);
@@ -309,6 +318,9 @@ static int load_type(int type)
     t->tex_data = asset_load(path, &size);
     uint32_t page_size = 512 + TEX_PAGE_WIDTH * TEX_PAGE_HEIGHT;
     if (t->tex_data && t->pages <= MAX_PAGES && size == page_size * t->pages) {
+#ifdef RE2_HEADLESS
+        t->drawable = 1; // GLES uploads the same texture through the Android renderer.
+#else
         DC_FlushRange(t->tex_data, size);
         glGenTextures(t->pages, t->tex);
         t->drawable = 1;
@@ -322,6 +334,7 @@ static int load_type(int type)
             }
             glColorTableEXT(0, 0, 256, 0, 0, (const uint16_t *)page);
         }
+#endif
     } else {
         enemy_last_error = 6;
     }
@@ -399,6 +412,14 @@ void enemy_spawn(int slot, int type, int flags, int voice, int32_t x, int32_t y,
         return;
     }
     e->flags = flags;
+    e->victim = type>=FIRST_PERSON_TYPE && (flags&0x100);
+    if(type==0x1f){
+        // NTSC-U zombie init 0x80100e08: explicit low-six-bit selector,
+        // otherwise one of the three original body appearances.
+        int selected=(flags>>16)&0x3f;
+        if(!selected){int a=rnd(),b=rnd(),shift=rnd()&3;selected=1+(a+(b<<shift))%3;}
+        e->appearance=selected>=1&&selected<=3?selected:1;
+    }
     e->voice = voice;
     if (voice && voice != voice_first) { // PS1: the room's first and a second voice kind
         if (!voice_first)
@@ -424,8 +445,10 @@ void enemy_spawn(int slot, int type, int flags, int voice, int32_t x, int32_t y,
     case 8: state = ST_EAT; break;
     }
     enter_state(e, state);
+    // Kendo's main animation 1 is his neutral stance; animation 2 is a
+    // non-cyclic weapon motion and must not be used as a looping idle.
     if (is_person(e))
-        set_anim(e, SET_MAIN, 2, 0);
+        set_anim(e, SET_MAIN, types[e->type].type == 0x48 ? 1 : 2, 0);
 }
 
 // The room's enemy sound set (FUN_8004f1d0): the first pair of voice kinds in
@@ -483,6 +506,7 @@ int enemy_member_get(int slot, int member, int *value)
     switch (member) {
     case 2: *value = e->routine; return 1;
     case 3: *value = e->routine == 1 ? e->state : e->mode; return 1;
+    case 4: *value = e->sub; return 1;
     case 7: *value = e->flags; return 1;
     case 0x0B: *value = e->x; return 1;
     case 0x0C: *value = e->y; return 1;
@@ -509,6 +533,7 @@ void enemy_member_set(int slot, int member, int value)
             enter_state(e, value);
         }
         break;
+    case 4: e->sub = value; break;
     case 7: e->flags = value; break;
     case 0x0B: e->x = (int16_t)value; break;
     case 0x0C: e->y = (int16_t)value; break;
@@ -537,7 +562,7 @@ static int crowded(int i, int32_t x, int32_t z)
     const Enemy *e = &enemies[i];
     for (int j = 0; j < MAX_ENEMIES; j++) {
         const Enemy *o = &enemies[j];
-        if (j == i || !present(o) || o->state >= ST_DYING)
+        if (j == i || !present(o) || abs(o->y-e->y)>900 || o->victim || o->state >= ST_DYING || o->state==ST_DOWN || o->state==ST_LYING || o->state==ST_SHOVED)
             continue;
         int64_t ox = o->x - x, oz = o->z - z, cx = o->x - e->x, cz = o->z - e->z;
         int64_t now = ox * ox + oz * oz, before = cx * cx + cz * cz;
@@ -553,7 +578,7 @@ int enemy_blocks_player(int32_t from_x, int32_t from_z, int32_t x, int32_t z)
 {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         const Enemy *e = &enemies[i];
-        if (!present(e) || e->state >= ST_DYING || e->state == ST_DOWN)
+        if (!present(e) || e->victim || e->state >= ST_DYING || e->state == ST_DOWN || e->state == ST_SHOVED)
             continue;
         int64_t nx = e->x - x, nz = e->z - z, ox = e->x - from_x, oz = e->z - from_z;
         int64_t now = nx * nx + nz * nz, before = ox * ox + oz * oz;
@@ -793,6 +818,30 @@ static void grab_player(const Enemy *e)
     }
 }
 
+static void fall(Enemy *e,int dying);
+// NTSC 0x80102d20: the released zombie can hit standing enemies at keys 7..24.
+static void shove_contacts(Enemy *e,int index,int32_t old_x,int32_t old_z){
+    double dx=e->x-old_x,dz=e->z-old_z,length=dx*dx+dz*dz;
+    if(length==0)return;
+    for(int i=0;i<MAX_ENEMIES;i++){
+        Enemy *o=&enemies[i];
+        if(i==index||!present(o)||is_person(o)||o->victim||o->plc.active||o->routine!=1||
+           o->hp<=0||abs(o->y-e->y)>900||(o->flags&EF_HOLD)||o->state==ST_SHOVED||
+           o->state==ST_DOWN||o->state==ST_LYING||o->state==ST_GRAB||o->state>=ST_DYING)continue;
+        double ox=o->x-old_x,oz=o->z-old_z,nx=o->x-e->x,nz=o->z-e->z;
+        if(nx*nx+nz*nz>=ox*ox+oz*oz)continue;
+        double t=(ox*dx+oz*dz)/length;t=t<0?0:t>1?1:t;
+        double cx=ox-t*dx,cz=oz-t*dz;
+        if(cx*cx+cz*cz>4.0*ENEMY_RADIUS*ENEMY_RADIUS)continue;
+        o->routine=1;o->state=ST_SHOVED;o->sub=1;o->flinch=0;
+        o->shove_dir=(int)(atan2(-dz,dx)*16384.0/3.141592653589793)&32767;
+        int back=(dx*cosLerp(o->dir)-dz*sinLerp(o->dir))>0;
+        // Original state-9 animation table at 0x801000d8: {3,3,4,13}.
+        set_anim(o,SET_MAIN,back?((rnd()&1)?13:4):3,rnd()&3);
+        o->timer2=400;sound_at(e,4);
+    }
+}
+
 // The zombie's side (0x801025a4)
 static void grab_zombie(Enemy *e, int i, int pressed)
 {
@@ -833,6 +882,7 @@ static void grab_zombie(Enemy *e, int i, int pressed)
         e->sub = 5;
         break;
     case 5: { // staggers back; from key 7 on it has let go and collides
+        int32_t old_x=e->x,old_z=e->z;
         int32_t x0, z0;
         turned_offset(m, e->anim, e->key, e->dir, &x0, &z0);
         int done = anim_step(e, NULL);
@@ -848,6 +898,7 @@ static void grab_zombie(Enemy *e, int i, int pressed)
             if (!game_blocked(e->x, e->z, e->x, e->z + dz, e->y))
                 e->z += dz;
         }
+        if(e->key>=7&&e->key<=24)shove_contacts(e,i,old_x,old_z);
         if (done) {
             if (grab.enemy == i && grab.step < 4)
                 grab.enemy = -1;
@@ -997,6 +1048,7 @@ static void start_script_mode(Enemy *e)
 
 static void script_mode(Enemy *e, int i)
 {
+    if(e->sub==0)start_script_mode(e); // Scripts reset the substate after setting routine/mode.
     int32_t step;
     const Enemy *t = e->target >= 2 && e->target - 2 < MAX_ENEMIES ? &enemies[e->target - 2] : NULL;
     switch (e->mode) {
@@ -1117,7 +1169,7 @@ void enemy_plc(int slot, const uint8_t *ins)
     if (was && !e->plc.active) { // plc_ret: back to its own routine
         e->anim_set = NULL;
         if (is_person(e))
-            set_anim(e, SET_MAIN, 2, 0);
+            set_anim(e, SET_MAIN, types[e->type].type == 0x48 ? 1 : 2, 0);
         else
             enter_state(e, e->state);
     }
@@ -1339,6 +1391,24 @@ void enemy_tick(const EnemyTarget *p)
         case ST_LUNGE: lunge(e, i, p, d); break;
         case ST_GRAB: grab_zombie(e, i, p->pressed); break;
         case ST_LYING: lying(e); break;
+        case ST_SHOVED: {
+            // 0x80103e98..0x80103f58: impulse 400, decelerating 30/tick;
+            // usually falls, otherwise finishes the stagger and resumes pursuit.
+            if(e->timer2>0){
+                int facing=e->dir;e->dir=e->shove_dir;walk(e,i,e->timer2);e->dir=facing;
+                e->timer2-=30;
+                if(e->timer2<=0&&(rnd()&7)){fall(e,0);break;}
+            }
+            if(anim_step(e,NULL)&&e->timer2<=0)enter_state(e,ST_CHASE);
+            break;
+        }
+        case ST_EAT:
+            // NTSC zombie 0x80103c14: script substate 3 starts main move
+            // 0x15 at key 0; after it finishes, return to normal pursuit.
+            if(e->sub==3){set_anim(e,SET_MAIN,0x15,0);e->sub=4;}
+            if(e->sub==4){if(anim_step(e,NULL))enter_state(e,ST_CHASE);}
+            else anim_step(e,NULL);
+            break;
         default: anim_step(e, NULL); break;
         }
     }
@@ -1496,6 +1566,7 @@ static void fallen(Enemy *e, int i)
     }
 }
 
+#ifndef RE2_HEADLESS
 static void draw_bone(const EnemyType *t, const Enemy *e, int bone)
 {
     const Model *m = &t->model;
@@ -1597,6 +1668,8 @@ void enemy_draw(int reserve_vertices, int reserve_polygons)
     }
 }
 
+#endif // !RE2_HEADLESS
+
 #ifndef ARM9
 // host tests: positions and step per tick
 void enemy_debug_print(int tick)
@@ -1609,3 +1682,23 @@ void enemy_debug_print(int tick)
     }
 }
 #endif
+
+// Immutable rendering records; no graphics API is used by the simulation.
+// slot,type,x,y,z,dir,flinch,bones, root offset[3], rotations[32][3].
+int enemy_poses(int *out)
+{
+    int count = 0;
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *e = &enemies[i];
+        if (!present(e) || !types[e->type].drawable) continue;
+        if (!e->pose_valid) update_pose(e);
+        int *p = out + count++ * ENEMY_POSE_SIZE;
+        p[0]=i; p[1]=types[e->type].type;
+        p[2]=e->x; p[3]=e->y; p[4]=e->z; p[5]=e->dir;
+        p[107]=e->appearance;
+        p[6]=e->flinch; p[7]=types[e->type].model.header->num_bones;
+        for (int k=0;k<3;k++) p[8+k]=e->pose_ofs[k];
+        for (int b=0;b<32;b++) for(int k=0;k<3;k++) p[11+3*b+k]=e->pose_rot[b][k];
+    }
+    return count;
+}
