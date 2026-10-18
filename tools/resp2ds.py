@@ -116,6 +116,8 @@ def core(esp_path, core_tim, tex_pal, out):
     esp = open(esp_path, "rb").read()
     vram = open(core_tim, "rb").read()          # 512 x 256 texels, 256 bytes a row
     t = open(tex_pal, "rb").read()
+    if struct.unpack_from("<II", t) != (0x10, 8):
+        raise ValueError(f"{tex_pal}: expected a 4 bpp TIM with palettes")
     clen, cx, cy, cw, ch = struct.unpack_from("<IHHHH", t, 8)
     clut = struct.unpack_from(f"<{cw * ch}H", t, 20)
     effects = []
@@ -130,6 +132,8 @@ def core(esp_path, core_tim, tex_pal, out):
         half = 0 if (tpage & 15) == 14 else 1   # page 0x1e = left half, 0x1f = right
         texels = b"".join(vram[y * 256 + half * 128:y * 256 + half * 128 + 128] for y in range(256))
         x, y = (clut_id & 63) * 16, clut_id >> 6
+        if not (cx <= x and x + 16 <= cx + cw and cy <= y < cy + ch):
+            raise ValueError(f"Effect {eid}: palette outside {tex_pal}")
         palettes = []
         for r in range(CORE_PALETTES):
             row = y - cy + r

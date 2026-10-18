@@ -663,106 +663,15 @@ static void set_info(int slot)
 
 // ---------------------------------------------------------------- combine
 // Weapon + its ammunition loads it up to the magazine size; herbs mix.
-#define ITEM_GREEN 0x26
-#define ITEM_RED 0x27
-#define ITEM_BLUE 0x28
-static const struct { uint8_t weapon, ammo, capacity; } loads[] = {
-    { 0x02, 0x14, 18 }, { 0x03, 0x14, 13 }, { 0x04, 0x14, 18 },   // hand guns
-    { 0x05, 0x16, 8 }, { 0x06, 0x16, 8 },                         // magnums
-    { 0x07, 0x15, 5 }, { 0x08, 0x15, 7 },                         // shotguns
-    { 0x09, 0x18, 6 }, { 0x0A, 0x19, 6 }, { 0x0B, 0x1A, 6 },      // grenade launcher
-    { 0x0C, 0x1D, 18 }, { 0x0E, 0x1C, 100 }, { 0x0F, 0x1B, 100 }, { 0x10, 0x17, 100 },
-};
-// mixed herbs 0x29.. : G+G, G+R, G+B, G+G+G, G+G+B, G+R+B
-static const uint8_t mixes[][3] = {
-    { ITEM_GREEN, ITEM_GREEN, 0x29 }, { ITEM_GREEN, ITEM_RED, 0x2A }, { ITEM_GREEN, ITEM_BLUE, 0x2B },
-    { 0x29, ITEM_GREEN, 0x2C }, { 0x29, ITEM_BLUE, 0x2D }, { 0x2B, ITEM_GREEN, 0x2D },
-    { 0x2A, ITEM_BLUE, 0x2E }, { 0x2B, ITEM_RED, 0x2E },
-};
-
-// the ammunition slot for the weapon in hand, -1 if none (FUN_80065708)
-static int spare_ammo(int *capacity)
-{
-    if (inventory_equipped < 0)
-        return -1;
-    int weapon = inventory[inventory_equipped].item;
-    for (unsigned i = 0; i < sizeof(loads) / sizeof(loads[0]); i++) {
-        if (loads[i].weapon != weapon)
-            continue;
-        for (int s = 0; s < INV_SLOTS; s++)
-            if (inventory[s].item == loads[i].ammo && inventory[s].count) {
-                *capacity = loads[i].capacity;
-                return s;
-            }
-    }
-    return -1;
-}
-
-int inventory_spare_ammo(void)
-{
-    int capacity;
-    return spare_ammo(&capacity) >= 0;
-}
-
-// FUN_80065780: fills the weapon in hand from its ammunition
-void inventory_reload(void)
-{
-    int capacity, s = spare_ammo(&capacity);
-    if (s < 0)
-        return;
-    InvSlot *w = &inventory[inventory_equipped], *m = &inventory[s];
-    int take = capacity - w->count;
-    if (take > m->count)
-        take = m->count;
-    if (take <= 0)
-        return;
-    w->count += take;
-    m->count -= take;
-    if (!m->count)
-        m->item = 0;
-}
-
 static int combine(int a, int b)
 {
-    InvSlot *x = &inventory[a], *y = &inventory[b];
-    if (a == b || !x->item || !y->item)
-        return 0;
-    for (unsigned i = 0; i < sizeof(loads) / sizeof(loads[0]); i++) {
-        InvSlot *w = x->item == loads[i].weapon ? x : y->item == loads[i].weapon ? y : NULL;
-        InvSlot *m = w == x ? y : x;
-        if (!w || m->item != loads[i].ammo)
-            continue;
-        int take = loads[i].capacity - w->count;
-        if (take <= 0) {
-            snprintf(info, sizeof(info), "%s is fully loaded.", item_name(w->item));
-            return 0;
-        }
-        if (take > m->count)
-            take = m->count;
-        w->count += take;
-        m->count -= take;
-        if (!m->count)
-            m->item = 0;
-        snprintf(info, sizeof(info), "%s loaded.", item_name(w->item));
-        game_menu_sound(SND_RELOAD);
-        return 1;
-    }
-    for (unsigned i = 0; i < sizeof(mixes) / sizeof(mixes[0]); i++) {
-        if (!((x->item == mixes[i][0] && y->item == mixes[i][1]) ||
-              (y->item == mixes[i][0] && x->item == mixes[i][1])))
-            continue;
-        x->item = mixes[i][2];
-        x->count = 0;
-        y->item = 0;
-        y->count = 0;
-        if (inventory_equipped == b)
-            inventory_equipped = -1;
-        snprintf(info, sizeof(info), "Mixed the herbs.");
-        game_menu_sound(SND_SELECT);
-        return 1;
-    }
-    snprintf(info, sizeof(info), "You cannot combine these.");
-    return 0;
+    int weapon = inventory[a].item >= 1 && inventory[a].item <= 0x13 ? inventory[a].item : inventory[b].item;
+    int result = inventory_combine(a, b);
+    if (result == -1) snprintf(info, sizeof(info), "%s is fully loaded.", item_name(weapon));
+    else if (result == 1) { snprintf(info, sizeof(info), "%s loaded.", item_name(weapon)); game_menu_sound(SND_RELOAD); }
+    else if (result == 2) { snprintf(info, sizeof(info), "Mixed the herbs."); game_menu_sound(SND_SELECT); }
+    else snprintf(info, sizeof(info), "You cannot combine these.");
+    return result > 0;
 }
 
 static void command(int k)
@@ -775,7 +684,7 @@ static void command(int k)
     switch (k) {
     case CMD_EQUIP:
         if (is_weapon(s->item)) {
-            inventory_equipped = inventory_equipped == sel ? -1 : sel;
+            inventory_equip(sel);
             snprintf(info, sizeof(info), inventory_equipped == sel ? "%s equipped." : "%s put away.",
                      item_name(s->item));
         } else {

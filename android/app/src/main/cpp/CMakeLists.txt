@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(re2thor C)
+set(CMAKE_C_STANDARD 11)
+get_filename_component(RE2_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
+add_library(re2thor SHARED native_inventory.c world.c "${RE2_ROOT}/source/inventory.c" "${RE2_ROOT}/source/script.c")
+target_include_directories(re2thor PRIVATE "${RE2_ROOT}/source")
+target_compile_options(re2thor PRIVATE -Wall -Wextra -Werror)

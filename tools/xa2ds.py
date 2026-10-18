@@ -16,17 +16,19 @@ xa_on 1, n (the common clips, e.g. the scream when Leon dies) uses the
 table at 0x80092838 in the executable (19 entries) with VOICE00.XAS; those
 are written as c_<nn>.bin.
 
-Usage: python3 -I xa2ds.py STAGE1.BIN VOICE01.XAS.raw2352 stage out_dir
+Usage: python3 -I xa2ds.py STAGE1.BIN VOICE01.XAS.raw2352 stage out_dir [PSX_EXE]
        python3 -I xa2ds.py --common SLES_009.72 VOICE00.XAS.raw2352 out_dir
-       (the .XAS as raw 2352-byte sectors, with the XA subheaders)
+       (the .XAS as raw 2352-byte sectors, with the XA subheaders;
+        pass PSX_EXE for NTSC-U stage tables, otherwise PAL is assumed)
 """
 import os
 import struct
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disc_profile import PAL, profile_for  # noqa: E402
+
 STAGE_BASE = 0x8011A000
-EXE_BASE = 0x80010000 - 0x800   # the PS-X EXE header is 2 KB
-COMMON_TABLE, COMMON_COUNT = 0x80092838, 19
 SECTOR = 2352
 MAGIC = 0x31435652  # "RVC1"
 PEAK = 30000      # normalised clip peak
@@ -43,7 +45,7 @@ IMA_STEPS = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37
 IMA_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8]
 
 
-def clip_table(stage_bin):
+def clip_table(stage_bin, profile=PAL):
     """Entries (channel, start, length) of the table stored to 0x800c6184."""
     regs, table = {}, None
     for o in range(4, min(len(stage_bin), 512), 4):
@@ -54,11 +56,13 @@ def clip_table(stage_bin):
             regs[rt] = imm << 16
         elif op == 0x09:
             regs[rt] = (regs.get(rs, 0) + simm) & 0xFFFFFFFF
-        elif op == 0x2B and imm == 0x6184:
+        elif op == 0x2B and ((regs.get(rs, 0) + simm) & 0xFFFFFFFF) == profile.stage_voice_pointer:
             table = regs.get(rt)
     if table is None:
         return []
     off = table - STAGE_BASE
+    if not 0 <= off < len(stage_bin):
+        raise ValueError(f"Stage voice table outside overlay: {table:#x}")
     return [struct.unpack_from("<3H", stage_bin, off + 6 * i) for i in range((len(stage_bin) - off) // 6)]
 
 
@@ -141,12 +145,15 @@ def main():
         exe = open(sys.argv[2], "rb").read()
         xa = open(sys.argv[3], "rb").read()
         out_dir, prefix = sys.argv[4], "c"
-        table = [struct.unpack_from("<3H", exe, COMMON_TABLE - EXE_BASE + 6 * i) for i in range(COMMON_COUNT)]
+        profile = profile_for(sys.argv[2])
+        table = [struct.unpack_from("<3H", exe, profile.common_voice + 6 * i)
+                 for i in range(profile.common_voice_count)]
     else:
         stage_bin = open(sys.argv[1], "rb").read()
         xa = open(sys.argv[2], "rb").read()
         out_dir, prefix = sys.argv[4], f"s{int(sys.argv[3])}"
-        table = clip_table(stage_bin)
+        profile = profile_for(sys.argv[5]) if len(sys.argv) > 5 else PAL
+        table = clip_table(stage_bin, profile)
     os.makedirs(out_dir, exist_ok=True)
     nsect = len(xa) // SECTOR
     written = 0

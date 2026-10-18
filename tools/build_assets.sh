@@ -7,6 +7,10 @@ set -e
 DISC="$1"
 shift
 cd "$(dirname "$0")/.."
+EXE=$(python3 -I tools/disc_profile.py "$DISC")
+TEX_PAL="$DISC/COMMON/DATA/TEX_PAL.TIM"
+# NTSC-U names the same VRAM palette resource TEX.TIM.
+[ -f "$TEX_PAL" ] || TEX_PAL="$DISC/COMMON/DATA/TEX.TIM"
 ROOMS="$*"
 [ -n "$ROOMS" ] || ROOMS=$(ls "$DISC/PL0/RDT" | sed -n 's/^\(ROOM....\)\.RDT$/\1/p')
 
@@ -27,7 +31,7 @@ fi
 python3 -I tools/pld2json.py "$DISC/PL0/PLD/PL00.PLD" build/leon/leon --plw "$DISC/PL0/PLD/PL00W00.PLW"
 python3 -I tools/model2ds.py build/leon/leon.json "$DISC/PL0/PLD/PL00.PLD" build/ds/model/leon
 # enemies and characters (model/emXX*.bin)
-python3 -I tools/em2ds.py "$DISC/SLES_009.72" "$DISC/PL0/PLD/CDEMD0.EMS" build/ds/model > /dev/null
+python3 -I tools/em2ds.py "$EXE" "$DISC/PL0/PLD/CDEMD0.EMS" build/ds/model > /dev/null
 
 # doors: sound/doorNN.bin and door/doorNN_{model,tex,prog}.bin from COMMON/DOOR/DOORNN.DO2
 mkdir -p build/ds/sound build/ds/door
@@ -54,7 +58,7 @@ rm -rf nitrofiles
 mkdir -p nitrofiles
 # enemy voices (bank 3, one set per room) and Leon's voice (bank 4: CORE00,
 # file 0x132 of table 0x800a0118 for character 0)
-python3 -I tools/enemse2ds.py "$DISC/SLES_009.72" "$DISC/COMMON/SOUND/ENEMSE.VBS" build/ds/sound > /dev/null
+python3 -I tools/enemse2ds.py "$EXE" "$DISC/COMMON/SOUND/ENEMSE.VBS" build/ds/sound > /dev/null
 python3 -I tools/vab2ds.py "$DISC/COMMON/SOUND/CORE00.EDH" build/ds/sound/core00.bin \
     --vb "$DISC/COMMON/SOUND/CORE00.VB" > /dev/null
 
@@ -75,12 +79,12 @@ for f in "$DISC"/COMMON/SOUND/MAIN*.BGM; do
     n=$(basename "$f" .BGM | tr 'A-Z' 'a-z')
     python3 -I tools/bgm2ds.py "$f" "build/ds/music/$n.bin" > /dev/null
 done
-python3 -I tools/bgm2ds.py --table "$DISC/SLES_009.72" "$DISC/COMMON/DATA/INIT_TBL.DAT" \
+python3 -I tools/bgm2ds.py --table "$EXE" "$DISC/COMMON/DATA/INIT_TBL.DAT" \
     build/ds/music/bgm_table.bin > /dev/null
 
 # status screen: item icons, names, Leon's portrait
 mkdir -p build/ds/menu
-python3 -I tools/menu2ds.py "$DISC/SLES_009.72" "$DISC/COMMON/DATA/ST0.TIM" \
+python3 -I tools/menu2ds.py "$EXE" "$DISC/COMMON/DATA/ST0.TIM" \
     "$DISC/COMMON/DATA/ITEMALL.PIX" build/ds/menu/items.bin > /dev/null
 python3 -I tools/itps2ds.py "$DISC/COMMON/DATA/ITPS.ITP" build/ds/menu/items.bin \
     build/ds/menu/pictures.bin > /dev/null
@@ -90,7 +94,7 @@ mkdir -p build/ds/effect
 python3 -I tools/esp2ds.py "$DISC/COMMON/DATA/CORE00.ESP" "$DISC/COMMON/DATA/CORE01.TIM" \
     build/ds/effect/core.bin > /dev/null
 python3 -I tools/resp2ds.py --core "$DISC/COMMON/DATA/CORE00.ESP" "$DISC/COMMON/DATA/CORE01.TIM" \
-    "$DISC/COMMON/DATA/TEX_PAL.TIM" build/ds/effect/core_fx.bin > /dev/null
+    "$TEX_PAL" build/ds/effect/core_fx.bin > /dev/null
 
 # "YOU DIED" (Leon)
 mkdir -p build/ds/die
@@ -99,9 +103,9 @@ python3 -I tools/die2ds.py "$DISC/COMMON/DATA/DIED00.DIE" build/ds/die/died00.bi
 # voice clips (xa_on): per stage and the common ones
 mkdir -p build/ds/voice
 for s in 1 2 3 4 5 6 7; do
-    python3 -I tools/xa2ds.py "$DISC/COMMON/BIN/STAGE$s.BIN" "$DISC/PL0/VOICE/VOICE0$s.XAS.raw2352" $s build/ds/voice > /dev/null
+    python3 -I tools/xa2ds.py "$DISC/COMMON/BIN/STAGE$s.BIN" "$DISC/PL0/VOICE/VOICE0$s.XAS.raw2352" $s build/ds/voice "$EXE" > /dev/null
 done
-python3 -I tools/xa2ds.py --common "$DISC/SLES_009.72" "$DISC/PL0/VOICE/VOICE00.XAS.raw2352" build/ds/voice > /dev/null
+python3 -I tools/xa2ds.py --common "$EXE" "$DISC/PL0/VOICE/VOICE00.XAS.raw2352" build/ds/voice > /dev/null
 
 # the opening movies (Leon meets Claire): need the STRs as raw sectors
 # (tools/extract_psx_iso.py writes them so); skipped without them

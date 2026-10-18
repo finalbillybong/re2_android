@@ -18,11 +18,9 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disc_profile import profile_for  # noqa: E402
 import vab2ds  # noqa: E402
 
-EXE_BASE = 0x80010000 - 0x800
-PAIRS = 0x8009F4CC
-PARTS = 0x8009FB90
 SECTOR = 2048
 
 
@@ -31,13 +29,14 @@ def main():
     vbs = open(sys.argv[2], "rb").read()
     out = sys.argv[3]
     os.makedirs(out, exist_ok=True)
-    pairs, o = [], PAIRS - EXE_BASE
+    profile = profile_for(sys.argv[1])
+    pairs, o = [], profile.enemy_pairs
     while exe[o] != 0xFF:
         pairs.append((exe[o], exe[o + 1]))
         o += 2
     for i in range(len(pairs)):
         size_a, sec_a, hi_a, _, size_b, sec_b, hi_b, _ = struct.unpack_from(
-            "<IHBBIHBB", exe, PARTS - EXE_BASE + 16 * i)
+            "<IHBBIHBB", exe, profile.enemy_parts + 16 * i)
         a = (sec_a | hi_a << 16) * SECTOR
         b = (sec_b | hi_b << 16) * SECTOR
         head, samples = vbs[a:a + size_a], vbs[b:b + size_b]

@@ -1,5 +1,5 @@
 // Host test: room scripts + enemy.c with the real model files.
-// Build: cc -Itests/stubs -Isource tests/enemy_host.c source/script.c source/enemy.c -o build/enemy_host
+// Build: cc -Itests/stubs -Isource tests/enemy_host.c source/script.c source/inventory.c source/enemy.c source/plc.c -lm -o build/enemy_host
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

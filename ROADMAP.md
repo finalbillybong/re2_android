@@ -1,4 +1,9 @@
-# re2ds – roadmap to the complete game
+# Upstream re2ds roadmap (Nintendo DS)
+
+> This document is retained from the upstream DS project. Its completion labels
+> describe that runtime, not this Android port. For Android status and the Leon
+> A/B integration sequence, see [README.md](README.md) and
+> [android/README.md](android/README.md).
 
 Goal: Resident Evil 2 (PS1, PAL; disc 1 = SLES-00972) complete as a native DS ROM – both
 characters, both scenarios, with menus, sound and movies. The ROM is always built locally from

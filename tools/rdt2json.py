@@ -265,7 +265,7 @@ def read_doors(data, offsets):
                 "aot": aot, "sce": sce, "sat": sat, "floor": floor, "quad_xz": quad,
                 "next_pos": [nx, ny, nz], "next_dir": ndir, "next_stage": stage + 1,
                 "next_room": room, "next_camera": cam, "next_floor": nfloor,
-                "door_type": dtype, "knock": knock, "key_id": key_id, "key_type": key_type,
+                "door_type": dtype, "door_file": tex, "door_variant": dtype, "knock": knock, "key_id": key_id, "key_type": key_type,
             }
     return [doors[k] for k in sorted(doors)]
 

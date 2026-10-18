@@ -21,19 +21,18 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disc_profile import PAL, profile_for  # noqa: E402
 import model2ds  # noqa: E402
 import pld2json  # noqa: E402
 
-TABLE = 0x8009328C
-EXE_BASE = 0x80010000 - 0x800   # PS-X EXE: RAM 0x80010000 at file offset 0x800
 SECTOR = 2048
-FIRST_TYPE, LAST_TYPE = 0x10, 0x5F
+FIRST_TYPE = 0x10
 
 
-def model_table(exe):
+def model_table(exe, profile=PAL):
     out = {}
-    for t in range(FIRST_TYPE, LAST_TYPE + 1):
-        o = TABLE - EXE_BASE + 32 * (t - FIRST_TYPE)
+    for t in range(FIRST_TYPE, profile.last_enemy_type + 1):
+        o = profile.enemy_models + 32 * (t - FIRST_TYPE)
         if o + 32 > len(exe):
             break
         tim_sec, tim_size, emd_sec, emd_size = struct.unpack_from("<4I", exe, o + 16)
@@ -75,7 +74,7 @@ def main():
     ems = open(sys.argv[2], "rb").read()
     out_dir = sys.argv[3]
     os.makedirs(out_dir, exist_ok=True)
-    for t, (tim_off, emd_off) in sorted(model_table(exe).items()):
+    for t, (tim_off, emd_off) in sorted(model_table(exe, profile_for(sys.argv[1])).items()):
         if emd_off >= len(ems):
             continue
         try:

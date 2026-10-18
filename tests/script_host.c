@@ -1,6 +1,6 @@
 // Host test for the script interpreter: runs the scripts of every converted
 // room for a while with stub engine hooks and reports problems.
-// Build: cc -O1 -g -fsanitize=undefined -Isource tests/script_host.c -o build/script_host
+// Build: cc -O1 -g -fsanitize=undefined -Isource tests/script_host.c source/inventory.c -o build/script_host
 // Run:   build/script_host nitrofiles/room/room*0.bin
 #include <stdio.h>
 #include <stdlib.h>

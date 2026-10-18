@@ -22,8 +22,12 @@ u16 rooms, then the pairs.
 Usage: python3 -I bgm2ds.py MAIN0B.BGM out.bin
        python3 -I bgm2ds.py --table SLES_009.72 INIT_TBL.DAT out.bin
 """
+import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disc_profile import profile_for  # noqa: E402
 
 MAGIC = 0x31554D52  # "RMU1"
 FORMAT_8BIT = 1
@@ -110,7 +114,7 @@ def convert(src, dst):
 def table(exe_path, init_path, dst):
     exe = open(exe_path, "rb").read()
     init = open(init_path, "rb").read()
-    o = 0x800a0110 - 0x80010000 + 0x800
+    o = profile_for(exe_path).stage_firsts
     firsts = list(exe[o:o + 7])
     rooms = 141
     pairs = init[0x22C:0x22C + 2 * rooms]

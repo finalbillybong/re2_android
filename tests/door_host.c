@@ -1,6 +1,6 @@
 // Host test for the door sequence: runs a door program with stub graphics and
 // prints the part positions over time.
-// Build: cc -Itests/stubs -Isource tests/door_host.c source/script.c -o build/door_host
+// Build: cc -Itests/stubs -Isource tests/door_host.c source/script.c source/inventory.c -o build/door_host
 // Run:   build/door_host 0   (door file number; needs nitrofiles/door, nitrofiles/sound)
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,16 +46,49 @@ void game_set_player_pos(int32_t x, int32_t y, int32_t z) { (void)x; (void)y; (v
 void game_set_player_dir(int16_t d) { (void)d; }
 void game_set_box_flag(int b, int f) { (void)b; (void)f; }
 void game_play_sound(int bank, int sound) { (void)bank; (void)sound; }
-void game_spawn_enemy(int s, int t, int v, int x, int y, int z, int d) { (void)s; (void)t; (void)v; (void)x; (void)y; (void)z; (void)d; }
+void game_spawn_enemy(int s, int t, int flags, int v, int x, int y, int z, int d) { (void)s; (void)t; (void)flags; (void)v; (void)x; (void)y; (void)z; (void)d; }
+void game_bgm_control(int i,int o,int t,int l,int r){(void)i;(void)o;(void)t;(void)l;(void)r;}
+void game_bgmtbl_set(int s,int r,int m,int u){(void)s;(void)r;(void)m;(void)u;}
+void game_voice(int k,int n){(void)k;(void)n;}
+int game_voice_playing(void){return 0;}
+void game_espr_on(const uint8_t *p){(void)p;}
+void game_espr_kill(int i,int t){(void)i;(void)t;}
+void game_floor_sound_set(int n,int on){(void)n;(void)on;}
+void game_object_hide(int n){(void)n;}
+void game_object_set(const uint8_t *p){(void)p;}
+int game_enemy_member(int s,int m,int *v){(void)s;(void)m;(void)v;return 0;}
+void game_enemy_member_set(int s,int m,int v){(void)s;(void)m;(void)v;}
+int game_object_member(int s,int m,int *v){(void)s;(void)m;(void)v;return 0;}
+void game_object_member_set(int s,int m,int v){(void)s;(void)m;(void)v;}
+int game_player_member(int m,int *v){(void)m;(void)v;return 0;}
+void game_player_member_set(int m,int v){(void)m;(void)v;}
+void game_plc(int w,int i,const uint8_t *p){(void)w;(void)i;(void)p;}
 const char *room_message(const Room *r, int n) { (void)r; (void)n; return NULL; }
 
+// Portable little-endian animation export, evaluated by the real door interpreter.
+static void put32(FILE *f, int value) {
+    unsigned v=(unsigned)value;
+    for(int i=0;i<4;i++) fputc((int)((v>>(i*8))&255),f);
+}
 int main(int argc, char **argv)
 {
     int file = argc > 1 ? atoi(argv[1]) : 0, variant = argc > 2 ? atoi(argv[2]) : 0;
     if (!door_begin(file, variant)) { printf("door %d missing\n", file); return 1; }
+    FILE *export = argc > 3 ? fopen(argv[3], "wb") : NULL;
+    if(argc>3 && !export) return 2;
+    if(export){fwrite("RDA1",1,4,export);put32(export,DS_HZ);put32(export,0);}
     int n = 0;
     const char *dump = getenv("DOOR_DUMP");   // frames to dump as JSON, e.g. "30,120,240"
     while (door_frame()) {
+        if(export){
+            put32(export,fade_level);
+            for(int i=0;i<MAX_PARTS;i++){
+                put32(export,parts[i].active ? parts[i].part : -1);
+                put32(export,parts[i].flags);
+                for(int k=0;k<3;k++)put32(export,parts[i].pos[k]);
+                for(int k=0;k<3;k++)put32(export,parts[i].rot[k]);
+            }
+        }
         if (dump) {
             char key[16];
             snprintf(key, sizeof(key), ",%d,", n);
@@ -83,6 +116,7 @@ int main(int argc, char **argv)
         }
         n++;
     }
+    if(export){fseek(export,8,SEEK_SET);put32(export,n);if(fclose(export))return 2;}
     door_end();
     printf("door %d variant %d: %d DS frames (%.1f s), close sound %d\n", file, variant, n, n / 60.0, sounds[1]);
     return 0;

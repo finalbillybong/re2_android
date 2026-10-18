@@ -1,7 +1,7 @@
 // Host test: a room's scripts with Leon and the enemies as the scripts move
 // them (plc.c), without graphics. Starts an event function and logs what
 // happens: plc commands, messages, camera cuts, positions.
-// Build: cc -Itests/stubs -Isource tests/cutscene_host.c source/script.c source/enemy.c source/plc.c -o build/cutscene_host
+// Build: cc -Itests/stubs -Isource tests/cutscene_host.c source/script.c source/inventory.c source/enemy.c source/plc.c -o build/cutscene_host
 // Run:   ./build/cutscene_host nitro:/room/room1010.bin 0x16 [ticks]
 #include <math.h>
 #include <stdio.h>

@@ -27,7 +27,9 @@
 #include "script.h"
 #include "sound.h"
 
+#ifndef DOOR_HZ
 #define DOOR_HZ 50
+#endif
 #define DS_HZ 60
 #define MAX_PARTS 8
 #define NUM_THREADS 4

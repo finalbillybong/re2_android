@@ -1,288 +1,141 @@
-# re2ds – Resident Evil 2 (PS1) on the Nintendo DS
+# RE2 Android — AYN Thor
 
-re2ds is a native Nintendo DS engine for **Resident Evil 2** (PS1, PAL disc 1, Leon,
-SLES-00972). It is not an emulator: converters turn the data of *your own* disc into DS
-formats, and a C engine (devkitARM + libnds) plays them with the game's original rules,
-reverse engineered from the PS1 executable.
+An experimental native Android port of **Resident Evil 2**, focused on the
+**AYN Thor**: gameplay on the upper display and touch inventory management on
+the lower display, with physical controller support.
 
-![re2ds running on a Nintendo DSi XL: Leon in the alley behind the gun shop, the status screen on the lower screen](docs/images/dsi-xl.jpg)
+This repository is the Android project. It is **based on the Nintendo DS
+[re2ds project by eray1605](https://github.com/eray1605/re2ds)** and retains its
+engine sources, asset converters and research. The Android application,
+dual-display integration and NTSC-U conversion support are developed here.
+It is not an official Capcom release or a finished port.
 
-*Running on real hardware (Nintendo DSi XL).*
+**Current version: 0.9 — world foundation / exploration preview.**
+Completable Leon A and Leon B campaigns are the intended goal; neither is
+implemented end to end yet. The presence of all room assets does not mean the
+full game is playable.
 
-> **No game data is included, and none may be shared.** Everything under `build/` and
-> `nitrofiles/` and the ROM `re2ds.nds` contain Capcom's data: they are generated locally
-> from your own disc, are ignored by git, and must never be committed or distributed.
+## What works on Android
 
-## Status
+- All **125 converted Leon-disc rooms** can be loaded on demand. The pause
+  menu includes a paged room browser for exploration and testing.
+- Original **320×240 backgrounds**, displayed in a full-height 4:3 viewport
+  on the Thor's upper screen (1440×1080 with side bars). Models render at the
+  viewport resolution. No replacement artwork is used.
+- Leon's movement, camera zones, collision, floor heights, stairs and slopes.
+- Door connections across the room catalog, with original door models and
+  animation programs. **Pause → Door animations: On/Off** saves the preference;
+  Off changes rooms instantly.
+- A themed lower-screen inventory with the original item artwork, selection,
+  equipment, inspection and combination backed by shared native C rules.
+- Visible item pickups with **“Will you take the …?”** confirmation. Declining
+  leaves the item; accepting adds it and removes its world model.
+- Controller focus after lower-screen touches, dual-display routing, screen
+  swapping, and a single-display fallback.
 
-Playable from the opening movie through Leon's disc 1 rooms:
+## What is unfinished
 
-- **World:** all 125 rooms of disc 1 – pre-rendered backgrounds with depth masks, camera
-  switches, collision, floors / stairs / slopes, doors with their 3D door animations, locks
-  and keys, room objects (items lying around, gates).
-- **Leon:** tank controls, walk / run / turn with the original turn rates and health
-  animations, pose blending, climbing / jumping down, aiming with auto-aim (standing enemies
-  before those on the ground), firing with muzzle flash and casings, reloading, the empty
-  click, the knife.
-- **Enemies:** zombies with the original AI (lurking, chasing over path zones, grab and bite,
-  struggling free, hit reactions, falling, dying, eating), people moved by the room scripts
-  (Kendo).
-- **Scripts:** a SCD bytecode interpreter covering every opcode used on disc 1: flags,
-  threads, AOTs, items, messages, cutscenes (`plc_*`), camera cuts, voices, effects.
-- **Status screen** on the lower screen: inventory, equip, check with the item pictures,
-  combine (loading weapons, mixing herbs), menu sounds.
-- **Sound:** sound effects per room, footsteps, music (the PS1 sequences on a DS sequencer),
-  voice clips (XA) for all stages, the opening movies with sound.
-- **Effects:** blood, muzzle fire, smoke, fires, glass shards (the PS1's ESP sprites with
-  their real palettes).
-- **Death:** the PS1's death sequence (white flash, circling camera, YOU DIED).
-- **Saving:** at the typewriters with an ink ribbon, 12 slots in `re2ds.sav` on the SD card;
-  NEW GAME / LOAD GAME at the start and after dying.
+This remains an exploration preview. Android story/cutscene actors, enemies,
+combat, health/healing, item boxes, in-game saving, audio, movies, puzzles and
+complete progression are not connected. Scenario initialization, A/B-specific
+flags, cross-scenario choices, endings and results still need implementation
+and validation.
 
-Still missing (see [ROADMAP.md](ROADMAP.md)): the item box, the map and files, the other enemy
-types, the remaining movies, Claire's disc.
+Exploration currently uses converted door definitions even when a story event
+would replace them. This bypass must be removed when story integration works.
+Script smoke tests do not prove that story events or either campaign complete.
+Some upstream features, including most enemy types/bosses and scenario support,
+are themselves unfinished and require new engine work.
 
-## Repository layout
-
-| Path | Contents |
-|------|----------|
-| `source/` | the DS engine (C). `formats.h` describes every DS data format. |
-| `tools/` | converters (Python 3, two small C tools) from the PS1 disc to `nitrofiles/` |
-| `tools/research/` | reverse engineering helpers: the EXE as an ELF for Ghidra/REA, symbol lists |
-| `tests/` | host tests that run the engine's script / enemy / cutscene code on a PC |
-| `docs/` | analysis notes of the original engine (addresses, tables, behaviour) |
-| `Makefile` | devkitPro ARM9 build with NitroFS |
-| `start.command` | builds the ROM and starts it in melonDS (macOS) |
-| `tools/setup_wsl.sh` | installs everything on Ubuntu / WSL (packages, devkitPro or its Docker image) |
-
-Main engine modules:
-
-| File | Role |
-|------|------|
-| `main.c` | game loop, rooms, cameras, Leon, rendering, weapons, death sequence |
-| `script.c` | the room script interpreter (SCD), flags, AOTs, inventory |
-| `enemy.c` | zombies and people, path zones, grabbing, hits |
-| `plc.c` | characters moved by the scripts (cutscenes) |
-| `door.c` | door animations (DO2 programs) |
-| `menu.c` | the status screen on the lower screen |
-| `effect.c`, `roomfx.c` | blood and casings; ESP effects of the core and the rooms |
-| `sound.c`, `music.c` | sound banks, voices, the music sequencer |
-| `movie.c` | movie player (FMV) |
-| `save.c` | save games on the SD card |
-| `assets.c` | file loading from NitroFS |
-
-## Building
-
-The game data is not in this repository: you convert it from **your own disc 1** (PAL,
-SLES-00972) and build the ROM on your computer. Never share the ROM – it contains Capcom's
-data.
-
-The steps are always the same:
-
-1. install the tools (once),
-2. extract your disc image,
-3. convert the game data (once, a few minutes),
-4. build the ROM with `make`,
-5. play it in melonDS.
-
-You need a `.bin/.cue` dump of disc 1; only the `.bin` of **Track 1** is used.
-
-### Windows
-
-Everything runs in **Ubuntu inside Windows (WSL)**. Only melonDS runs as a normal Windows
-program.
-
-**1. Install WSL and Ubuntu (once).** Open PowerShell as administrator (right-click the Start
-button → *Terminal (Admin)*), run `wsl --install` and restart Windows. Then press the Windows
-key and type *Ubuntu* to open it. The first start asks for a new Linux user name and password
-(they do not have to match your Windows ones). If Ubuntu does not show up, run
-`wsl --install -d Ubuntu` in PowerShell.
-
-**2. Get re2ds and install the tools (once).** In the Ubuntu window:
-
-```bash
-cd ~
-git clone https://github.com/eray1605/re2ds.git
-cd re2ds
-tools/setup_wsl.sh
-```
-
-The script asks for your Linux password and installs everything (compiler, Python, FFmpeg,
-devkitPro). If devkitpro.org is blocked for your network (`403 Forbidden`), it uses
-devkitPro's Docker image instead – nothing to do for you.
-
-> **All following commands are typed in the Ubuntu window, in the `re2ds` folder.** In a new
-> Ubuntu window go there first with `cd ~/re2ds`.
-
-**3. Extract your disc.** You do **not** change into the folder of your `.bin` – stay in
-`re2ds` and type the full path of the file. In Ubuntu, `C:\` is `/mnt/c/` and `\` becomes
-`/`. Example for a file in your *Downloads* folder (put your Windows user name instead of
-`YourName`; keep the quotes, the name has spaces):
-
-```bash
-python3 -I tools/extract_psx_iso.py "/mnt/c/Users/YourName/Downloads/Resident Evil 2 (Europe) (Disc 1) (Track 1).bin" build/disc1
-```
-
-Tips: `ls /mnt/c/Users/` shows the Windows user names, and the **Tab** key completes a path
-while you type it.
-
-**4. Convert the game data** (a few minutes; fills `nitrofiles/`, about 290 MB):
-
-```bash
-tools/build_assets.sh build/disc1
-```
-
-**5. Build the ROM:**
-
-```bash
-make
-```
-
-This makes `re2ds.nds`. If the script set up Docker: after restarting Windows run
-`sudo service docker start` once before `make`.
-
-**6. Play.** Copy the ROM to your Windows desktop and open it in melonDS for Windows
-(<https://melonds.kuribo64.net/>):
-
-```bash
-cp re2ds.nds /mnt/c/Users/YourName/Desktop/
-```
-
-For saving see [Saving](#saving).
-
-### macOS and Linux
-
-Install the tools once:
-
-- **macOS:** devkitPro's installer (<https://devkitpro.org/wiki/Getting_Started>, then
-  `sudo dkp-pacman -S nds-dev`), and `brew install python ffmpeg`.
-- **Ubuntu / Debian:** `tools/setup_wsl.sh` works there as well.
-- Elsewhere: devkitPro with `nds-dev`, Python 3, FFmpeg with its libraries (`libavcodec`,
-  `libavutil`, `libswscale`), a C compiler and `pkg-config`.
-
-Then, in the `re2ds` folder:
-
-```bash
-python3 -I tools/extract_psx_iso.py "path/to/Resident Evil 2 (Europe) (Disc 1) (Track 1).bin" build/disc1
-tools/build_assets.sh build/disc1
-make
-./start.command      # macOS: builds if needed and starts melonDS
-```
-
-### After updating the code
-
-```bash
-git pull
-tools/build_assets.sh build/disc1   # only when the release notes say the data changed
-make
-```
-
-`make` finds devkitPro in `/opt/devkitpro` (or where `DEVKITARM` points) and otherwise builds
-in devkitPro's Docker image `devkitpro/devkitarm`. Single rooms can be converted again with
-`tools/convert_room.sh build/disc1 ROOM1010`. Files with Form 2 sectors (XA voices, the
-audio of the movies) are extracted as raw sectors with a `.raw2352` suffix; the converters
-need them like that.
+See the [Android implementation notes](android/README.md) for controls,
+validation, known limitations and the integration sequence. [ROADMAP.md](ROADMAP.md)
+is the inherited **DS upstream roadmap**, not a list of working Android features.
 
 ## Controls
 
-| Button | Action |
-|--------|--------|
-| D-pad | walk / turn (up = forward, down = backward) |
-| B | run (hold with up) |
-| A | action: doors, items, examine; fire while aiming |
-| R | aim (hold); up / down aims high / low |
-| START | status screen (inventory); skips the opening movie |
-| touch | select on the status screen |
+| Input | Action |
+| --- | --- |
+| Left stick / D-pad | Move forward/back and turn |
+| Hold B while moving forward | Run |
+| A | Interact with a nearby door, item or scenery |
+| Start / tap gameplay | Open the pause menu |
+| D-pad / stick, then A | Navigate and select a pause-menu entry |
+| B / Start in the pause menu | Resume |
+| Touch a lower-screen inventory slot | Pause and manage inventory |
+| A / X / Y in inventory | Equip / combine / inspect |
+| Start / lower-screen Exit | Return to gameplay |
 
-Debug:
+Pickup prompts accept touch or left/right plus A; B/Start cancels.
+Room warps, test supplies and reset are development tools in the pause menu.
 
-| Button | Action |
-|--------|--------|
-| SELECT | room menu: warp to any room (L/R ±10, A warp) |
-| hold SELECT while the game boots | leaves out the opening movie |
-| L + A at a door | opens any lock |
-| L + A at a typewriter | saves without an ink ribbon |
+## Build locally
 
-In melonDS's default keyboard mapping START is Enter and SELECT is Backspace (check
-*Config → Input and hotkeys*).
+**No game data is included.** Supply your own original NTSC-U Leon disc dump
+(`SLUS-00421`, supported executable revision). Claire discs, Dual Shock releases
+and other US revisions are not supported by the current conversion profile.
+The converters retain upstream PAL support, but this Android build has been
+validated with the supported NTSC-U disc.
 
-## Saving
+Requirements:
 
-Saving needs an SD card: on a flashcart or a DSi it is the card the ROM runs from
-(`re2ds.sav` next to it). In melonDS it is a virtual card:
+- Python 3, a C compiler, FFmpeg development libraries and `pkg-config` for conversion.
+- JDK 17 and Android SDK platform 35, Build Tools 34.0.0.
+- NDK 27.0.12077973 and CMake 3.22.1.
+- Gradle 8.9 through the included wrapper; Android Gradle Plugin 8.7.3.
 
-1. *Config → Emu settings → DLDI*: tick **Enable DLDI (for homebrew)**, set the SD card
-   image size to **1 GB** and tick **Sync SD to folder** with an empty folder, e.g.
-   `Documents/re2ds-sd`.
-2. Copy `re2ds.nds` into that folder after every build (melonDS closed). With DLDI on, the
-   game reads its data from that copy. On macOS `start.command` does this by itself
-   (folder `~/Documents/re2ds-sd`, or set `RE2DS_SD`); on Windows:
-   `cp re2ds.nds /mnt/c/Users/YourName/Documents/re2ds-sd/`.
+The app builds for **arm64-v8a**, requires Android 8.0/API 26 or newer, and has
+been tested on the Thor running Android 13. Set `JAVA_HOME` and `ANDROID_HOME`
+to your installed toolchains; the build script also supports a local toolchain
+under `build/android-tools`.
 
-The save file `re2ds.sav` then appears in that folder. (A 512 MB image is too small: melonDS
-keeps the ROM there padded to 512 MB.)
+```sh
+git clone https://github.com/finalbillybong/re2_android.git
+cd re2_android
 
-## Tests
+# Extract and convert your own Leon disc; keep generated files under build/.
+python3 -I tools/extract_psx_iso.py '/path/to/Leon Disc 1 Track 1.bin' build/disc1-usa
+tools/build_assets.sh build/disc1-usa
 
-The host tests compile the engine's platform-independent parts for the PC:
+# Stage local assets, build the APK, run JVM tests and Android lint.
+tools/build_android.sh
 
-```bash
-# every room's scripts with stubbed engine hooks; reports unknown opcodes
-cc -O1 -g -fsanitize=undefined -Isource tests/script_host.c -o build/script_host
-build/script_host nitrofiles/room/room[0-9][0-9a-f][0-9a-f]0.bin
-
-# zombies against a scripted player
-cc -Itests/stubs -Isource tests/enemy_host.c source/script.c source/enemy.c source/plc.c -o build/enemy_host -lm
-build/enemy_host
-
-# a room event with Leon and the enemies moved by the script (here: Kendo in room 101)
-cc -Itests/stubs -Isource tests/cutscene_host.c source/script.c source/enemy.c source/plc.c -o build/cutscene_host -lm
-build/cutscene_host nitro:/room/room1010.bin 0x16 1200
+adb install -r build/android/re2-thor-exploration.apk
+adb shell am start -W -n org.re2ds.thor/.MainActivity
 ```
 
-`tools/scd_disasm.py ROOM1010.RDT` disassembles a room's scripts; `--check` validates the jump
-targets of all block opcodes over all rooms.
+Read the [NTSC-U conversion notes](docs/ntsc-u.md) for the supported executable
+fingerprint and conversion checks. The Android asset stage uses original decoded
+backgrounds from `build/bg`, converted assets from `nitrofiles`, and room script
+metadata from `build/room`; keep these outputs after conversion.
 
-## How the original works
+The locally built APK **contains game data**. Do not commit or distribute it,
+extracted disc files or converted assets. An asset-import workflow for a
+source-only distributable app remains future work.
 
-The engine follows the PS1 code wherever it has been analysed; source comments name the
-PS1 functions and tables they reproduce (`FUN_8003ed74`, `0x8009f560`, …). The notes in
-[docs/](docs/) collect what is known:
+## Validation
 
-- [player-control.md](docs/player-control.md) – input, the player state machine, turning,
-  aiming, firing, reloading
-- [enemy-zombie.md](docs/enemy-zombie.md) – the zombie AI
-- [enemy-others.md](docs/enemy-others.md) – dog, crow, licker, the enemy load table
-- [damage.md](docs/damage.md) – hit checks, damage tables, hit reactions, head shots
-- [engine-notes.md](docs/engine-notes.md) – scripts, cutscenes, voices, room objects, effects,
-  item pictures, movies, the death sequence
+Version 0.9 passes 14 JVM tests, Android lint, and native address/undefined-behaviour
+checks. Asset tests decode all 125 rooms, 1,253 camera definitions and 106 door
+file/variant combinations covering 279 recorded doorways. Native smoke tests run
+scripts in all 125 rooms. The build is installed on a Thor; prior hardware checks
+confirmed dual-screen controls, inventory focus, pickup confirmation, and the
+door-animation toggle. The expanded room browser has also loaded room 103 on-device.
 
-To look at the code yourself, wrap the executable as an ELF (optionally with an overlay such as
-the zombie code or `DIEDEMO.BIN`) and open it in Ghidra:
+These checks validate the exploration foundation, not complete A/B playthroughs.
+Activity restoration retains some runtime state; it is not an in-game save system.
 
-```bash
-python3 -I tools/research/psxexe_to_elf.py build/disc1/SLES_009.72 sles.elf tools/research/re2_symbols.txt
-```
+## Repository layout and credits
 
-### Conventions
+| Path | Purpose |
+| --- | --- |
+| `android/` | Android app, GLES renderer, dual-screen UI, JNI bridge and JVM tests |
+| `source/` | Inherited DS engine and shared C modules used by the Android port |
+| `tools/` | Inherited and adapted disc converters, Android staging/build scripts |
+| `tests/` | Native engine and conversion checks |
+| `docs/` | Upstream research and NTSC-U conversion notes |
+| `Makefile`, `start.command` | Retained upstream DS build tooling; not the Android build entry point |
 
-- World coordinates are RE2 game units, used directly as DS 20.12 fixed point
-  (4096 units = 1.0); −Y is up.
-- Angles: RE2 uses 4096 per turn, the DS engine 32768 (× 8).
-- Models face +X; the model matrix is `T(pos) · Ry(dir)`, bones `M_parent · T(pos) · Rx · Ry · Rz`.
-- The PAL game logic runs at 25 Hz (`VSync(2)` at 50 Hz); the DS engine steps the game logic
-  at that rate and turns per DS frame scaled to it.
-- Camera: `lookAt(from, to)` with up = −Y, projected onto 320 × 240 at distance
-  `RID.distance >> 7`, scaled by 0.8 for 256 × 192.
-
-## Contributing
-
-- Keep the engine faithful to the original: when something is ported, say in a comment which
-  PS1 function or table it comes from, and mark guesses as such.
-- Write code and comments in English and match the style of the surrounding code.
-- Run the host tests before sending changes; they need your own converted data.
-- Never commit anything generated from the disc (`build/`, `nitrofiles/`, `*.nds`).
-
-Built on the file format work of [OpenBiohazard2](https://github.com/OpenBiohazard2/OpenBiohazard2)
-(a Go reimplementation of the PC version), whose script opcode table and readers were the
-starting point for several converters.
+The original engine, reverse-engineering work and conversion pipeline come from
+[eray1605/re2ds](https://github.com/eray1605/re2ds) and its contributors. This Android
+project builds on that work; it does not claim authorship of the upstream engine.
+Resident Evil / Biohazard and the original game assets belong to Capcom.

@@ -114,17 +114,7 @@ int cut_replace(int cam);                   // camera after cut_replace remappin
 void script_camera_changed(int previous, int cam); // keeps cut_old and VAR_CUT current
 int cut_auto_enabled(void);
 
-// Leon's inventory: 8 slots, item 0 = empty; count = quantity, or the
-// rounds in a weapon (0 = empty gun, still there)
-#define INV_SLOTS 8
-typedef struct {
-    uint8_t item, count;
-} InvSlot;
-extern InvSlot inventory[INV_SLOTS];
-extern int inventory_equipped;      // slot of the weapon in hand, -1 = none
-int inventory_has(int item);
-int inventory_add(int item, int amount); // 0 if there is no room
-void inventory_reset(void);
+#include "inventory.h"
 
 // What a save game keeps of the scripts: every flag array and variable.
 #define SCRIPT_STATE_SIZE (NUM_FLAG_ARRAYS * 32 + NUM_VARS * 2)

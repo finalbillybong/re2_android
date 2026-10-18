@@ -14,19 +14,22 @@ Output menu/items.bin:
 
 Usage: python3 -I menu2ds.py SLES_009.72 ST0.TIM ITEMALL.PIX out.bin
 """
+import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from disc_profile import PAL, profile_for  # noqa: E402
 
 MAGIC = 0x31544952  # "RIT1"
 MSG = (" .___()_____0123456789:_,\"!?_ABCDEFGHIJKLMNOPQRSTUVWXYZ[/]'-_abc"
        "defghijklmnopqrstuvwxyz_________")
-NAMES = 0x871D4
 UI = [(0, 0, 0), (5, 6, 7), (12, 13, 14), (20, 21, 22), (31, 31, 31), (6, 26, 8), (30, 27, 6), (28, 4, 3),
       (2, 9, 3), (11, 9, 2), (10, 2, 2), (0, 0, 0)]
 
 
-def names(exe):
-    out, p = [], NAMES
+def names(exe, profile=PAL):
+    out, p = [], profile.item_names
     while exe[p] == 0xF7:
         p += 1
         s = ""
@@ -60,7 +63,7 @@ def main():
     for want in UI:
         best = min(range(1, 256), key=lambda i: sum((a - b) ** 2 for a, b in zip(rgb(pal[i]), want)))
         free.append(best)
-    nm = names(exe)
+    nm = names(exe, profile_for(sys.argv[1]))
     blob, offs = b"", []
     for n in nm:
         offs.append(len(blob))

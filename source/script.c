@@ -88,8 +88,6 @@ static int16_t vars[NUM_VARS];
 static uint8_t cam_map[32];
 static uint8_t cam_auto = 1;
 static uint8_t old_cam;
-InvSlot inventory[INV_SLOTS];
-int inventory_equipped = -1;
 
 static inline int16_t rd16(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
 static inline uint16_t ru16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -123,34 +121,6 @@ void flag_set(int array, int bit, int value)
 int cut_replace(int cam) { return cam >= 0 && cam < 32 ? cam_map[cam] : cam; }
 int cut_auto_enabled(void) { return cam_auto; }
 
-int inventory_has(int item)
-{
-    for (int i = 0; i < INV_SLOTS; i++)
-        if (inventory[i].item && inventory[i].item == item)
-            return 1;
-    return 0;
-}
-
-// Ammunition (ids 0x14-0x1D) and ink ribbons stack; everything else takes a slot.
-static int stacks(int item) { return item >= 0x14 && item <= 0x1E; }
-
-int inventory_add(int item, int amount)
-{
-    if (stacks(item))
-        for (int i = 0; i < INV_SLOTS; i++)
-            if (inventory[i].item == item) {
-                inventory[i].count += amount;
-                return 1;
-            }
-    for (int i = 0; i < INV_SLOTS; i++)
-        if (!inventory[i].item) {
-            inventory[i].item = item;
-            inventory[i].count = amount;
-            return 1;
-        }
-    return 0; // full
-}
-
 // ------------------------------------------------------------ save games
 void script_state_get(uint8_t *out)
 {
@@ -168,12 +138,6 @@ void script_state_reset(void)
 {
     memset(flags, 0, sizeof(flags));
     memset(vars, 0, sizeof(vars));
-}
-
-void inventory_reset(void)
-{
-    memset(inventory, 0, sizeof(inventory));
-    inventory_equipped = -1;
 }
 
 // ------------------------------------------------------------ AOTs
